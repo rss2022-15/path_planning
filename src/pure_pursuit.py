@@ -16,7 +16,7 @@ class PurePursuit(object):
     """
     def __init__(self):
         self.odom_topic       = rospy.get_param("~odom_topic")
-        self.lookahead        = 0.5 # FILL IN #
+        self.lookahead        = 2.5 # FILL IN #
         self.speed            = 1 # FILL IN #
         #self.wrap             = # FILL IN #
         #self.wheelbase_length = # FILL IN #
@@ -26,6 +26,7 @@ class PurePursuit(object):
         self.traj_sub = rospy.Subscriber("/trajectory/current", PoseArray, self.trajectory_callback, queue_size=1)
         self.drive_pub = rospy.Publisher("/drive", AckermannDriveStamped, queue_size=1)
         self.car_sub = rospy.Subscriber(self.odom_topic, Odometry, self.odom_callback, queue_size=1)
+        self.debug_pub = rospy.Publisher("/debug_point", Marker, queue_size=1)
 
     def trajectory_callback(self, msg):
         ''' Clears the currently followed trajectory, and loads the new one from the message
@@ -57,30 +58,58 @@ class PurePursuit(object):
         i_shortest_distance = np.argmin(distances)
 
         target = None
-        rospy.loginfo(target)
         for i in range(i_shortest_distance, len(distances)-1):
             intersection = self.line_circle_intersection(self.trajectory.points[i], self.trajectory.points[i+1], carp, self.lookahead)
-            if intersection is not None:
+            if intersection is not None and len(intersection) != 0:
+                rospy.loginfo(["target: ", target])
                 target = intersection[0]
                 break
+        else:
+            return
+
+        marker = Marker()
+        marker.header.frame_id = "/map"
+        marker.header.stamp = rospy.Time.now()
+
+        marker.type = 2
+        marker.id = 0
+
+        marker.scale.x = 0.3
+        marker.scale.y = 0.3
+        marker.scale.z = 0.3
+
+        marker.color.r = 1.0
+        marker.color.g = 0.0
+        marker.color.b = 0.83
+        marker.color.a = 1.0
+
+        marker.pose.position.x = target[0]
+        marker.pose.position.y = target[1]
+        marker.pose.position.z = 0
+        marker.pose.orientation.x = 0.0
+        marker.pose.orientation.y = 0.0
+        marker.pose.orientation.z = 0.0
+        marker.pose.orientation.w = 1.0
+
+        self.debug_pub.publish(marker)
 
 
         # Implement drive command 
-        relative_x = carp[0] - target[0]
-        relative_y = carp[1] - target[1]
+        relative_x = -(carp[0] - target[0])
+        relative_y = (carp[1] - target[1])
         drive_cmd = AckermannDriveStamped()
         angle_error = np.arctan(relative_y / relative_x)
         angle_deriv = angle_error - self.last_angle_error
         self.last_angle_error = angle_error
         k_1 = 1
-        k_2 = 1
+        k_2 = 0
         angle = k_1 * angle_error + k_2 * angle_deriv
 
         drive_cmd.drive.speed = self.speed
         drive_cmd.drive.steering_angle = angle
 
         self.drive_pub.publish(drive_cmd)
-        rospy.loginfo(target)
+        rospy.loginfo(["end target: ", target])
 
     def line_circle_intersection(self, p1, p2, pc, r):
         """
@@ -112,7 +141,7 @@ class PurePursuit(object):
         """
         Calculate distance from (xp, yp) to line segment defined by (x1, y1), (x2, y2)
         """
-        rospy.loginfo((p1, p2, carp))
+        #rospy.loginfo((p1, p2, carp))
         x1, y1 = p1
         x2, y2 = p2
         xp, yp = carp
@@ -131,12 +160,12 @@ class PurePursuit(object):
         x = x1 + u * dx
         y = y1 + u * dy
 
+
         distx = x - xp
         disty = y - yp
 
         dist = (distx**2 + disty**2)**0.5
-
-        return dist
+        return dist#((x,y), dist)
 
 if __name__=="__main__":
     rospy.init_node("pure_pursuit")
