@@ -5,6 +5,8 @@ import numpy as np
 import time
 import utils
 import tf
+#import tf2_ros
+#import tf2_geometry_msgs
 
 from geometry_msgs.msg import PoseArray, PoseStamped
 from visualization_msgs.msg import Marker
@@ -17,9 +19,9 @@ class PurePursuit(object):
     def __init__(self):
         self.odom_topic       = rospy.get_param("~odom_topic")
         self.lookahead        = 2.5 # FILL IN #
-        self.speed            = 1 # FILL IN #
+        self.speed            = 1. # FILL IN #
         #self.wrap             = # FILL IN #
-        #self.wheelbase_length = # FILL IN #
+        self.wheelbase_length = 1. # FILL IN #
         self.last_angle_error = 0
         self.current_odom     = None
         self.trajectory  = utils.LineTrajectory("/followed_trajectory")
@@ -37,7 +39,7 @@ class PurePursuit(object):
         self.trajectory.publish_viz(duration=0.0)
 
     def odom_callback(self, data):
-        rospy.loginfo("odom called back :)")
+        #rospy.loginfo("odom called back :)")
         self.current_odom = data
         self.get_nearest_point()
 
@@ -46,26 +48,48 @@ class PurePursuit(object):
             return
         #v_dist = np.vectorize(self.calc_dist, excluded=["carp"])
         #distances = v_dist(self.trajectory.points, np.roll(self.trajectory.points, -1), carp=(self.current_odom.pose.pose.position.x, self.current_odom.pose.pose.position.y))
+
+        # carp = Position of car in world frame
         carp = (self.current_odom.pose.pose.position.x, self.current_odom.pose.pose.position.y)
+        car_quaternion_ = [self.current_odom.pose.pose.orientation.x, self.current_odom.pose.pose.orientation.y, self.current_odom.pose.pose.orientation.z, self.current_odom.pose.pose.orientation.w]
+        # caro = Orientation of car in world frame
+        caro = tf.transformations.euler_from_quaternion(car_quaternion_)[2]
 
         distances = np.zeros(len(self.trajectory.points)-1)
         # TODO: Vectorize this segment so it runs faster
         i=0
-        for p1, p2 in zip(self.trajectory.points[:-1], np.roll(self.trajectory.points, -1)[:-1]):
+        #for p1, p2 in zip(self.trajectory.points[:-1], np.roll(self.trajectory.points, -1)[:-1]):
+        while i < len(distances):
+            p1 = self.trajectory.points[i]
+            p2 = self.trajectory.points[i+1]
+            #if i == 0:
+                #rospy.loginfo(["points", p1, p2])
             distances[i] = self.calc_dist(p1, p2, carp)
             i += 1
 
         i_shortest_distance = np.argmin(distances)
+        #rospy.loginfo(["distances: ", distances])
 
         target = None
-        for i in range(i_shortest_distance, len(distances)-1):
+        for i in range(i_shortest_distance, len(distances)):
             intersection = self.line_circle_intersection(self.trajectory.points[i], self.trajectory.points[i+1], carp, self.lookahead)
             if intersection is not None and len(intersection) != 0:
-                rospy.loginfo(["target: ", target])
-                target = intersection[0]
+                j = 0
+                targets = []
+                while len(targets) < 2:
+                    if intersection is not None and len(intersection) != 0:
+                        for point in intersection:
+                            point = (point[0], point[1]+j)
+                            targets.append(point)
+                    j += 1
+                    if i+j <= len(distances)-1:
+                        intersection = self.line_circle_intersection(self.trajectory.points[i+j], self.trajectory.points[i+j+1], carp, self.lookahead)
+                    else:
+                        break
                 break
         else:
             return
+        target = max(targets, key=lambda x: x[1])[0]
 
         marker = Marker()
         marker.header.frame_id = "/map"
@@ -93,14 +117,26 @@ class PurePursuit(object):
 
         self.debug_pub.publish(marker)
 
-
         # Implement drive command 
-        relative_x = -(carp[0] - target[0])
-        relative_y = (carp[1] - target[1])
+        # Get relative position of target in world frame
+        relative_x = (target[0] - carp[0])
+        relative_y = (target[1] - carp[1])
         drive_cmd = AckermannDriveStamped()
-        angle_error = np.arctan(relative_y / relative_x)
+        distance_to_point = np.sqrt((target[1]-carp[1])**2 + (target[0]-carp[0])**2)
+        #angle_to_point = np.arctan(float(relative_y) / relative_x) - caro
+
+        # Convert world frame target to local frame of car by rotation
+        local_x = relative_x * np.cos(-caro) - relative_y * np.sin(-caro)
+        local_y = relative_y * np.cos(-caro) + relative_x * np.sin(-caro)
+
+        # Find the angle error of the car to the point
+        angle_to_point = np.arctan(local_y / local_x)
+        #rospy.loginfo(["car orientation:", caro, "angle to point: ", angle_to_point])
+        angle_error = angle_to_point #np.arctan(2.*self.wheelbase_length*np.sin(angle_to_point) / self.lookahead)
+
         angle_deriv = angle_error - self.last_angle_error
         self.last_angle_error = angle_error
+
         k_1 = 1
         k_2 = 0
         angle = k_1 * angle_error + k_2 * angle_deriv
@@ -109,7 +145,7 @@ class PurePursuit(object):
         drive_cmd.drive.steering_angle = angle
 
         self.drive_pub.publish(drive_cmd)
-        rospy.loginfo(["end target: ", target])
+        #rospy.loginfo(["end target: ", target])
 
     def line_circle_intersection(self, p1, p2, pc, r):
         """
@@ -134,12 +170,12 @@ class PurePursuit(object):
                 , cy + (-big_d*dx + sign * abs(dy) * discriminant**0.5) / dr**2)
                 for sign in ((1, -1) if dy < 0 else (-1, 1))]
             frac_along_segment = [(xi - p1x) / dx if abs(dx) > abs(dy) else (yi - p1y) / dy for xi, yi in intersections]
-            intersections = [pt for pt, frac in zip(intersections, frac_along_segment) if 0 <= frac <= 1]
+            intersections = [(pt, frac) for pt, frac in zip(intersections, frac_along_segment) if 0 <= frac <= 1]
             return intersections
 
     def calc_dist(self, p1, p2, carp):
         """
-        Calculate distance from (xp, yp) to line segment defined by (x1, y1), (x2, y2)
+        Calculate distance from carp(osition) (xp, yp) to line segment defined by p1(x1, y1), p2(x2, y2)
         """
         #rospy.loginfo((p1, p2, carp))
         x1, y1 = p1
@@ -159,7 +195,6 @@ class PurePursuit(object):
 
         x = x1 + u * dx
         y = y1 + u * dy
-
 
         distx = x - xp
         disty = y - yp
