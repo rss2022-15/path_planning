@@ -8,7 +8,7 @@ from nav_msgs.msg import OccupancyGrid
 import json
 import tf.transformations
 import tf
-from scipy import ndimage
+# from scipy import ndimage
 
 
 EPSILON = 0.00000000001
@@ -47,7 +47,7 @@ class LineTrajectory(object):
 
     def distance_to_end(self, t):
         if not len(self.points) == len(self.distances):
-            print "WARNING: Different number of distances and points, this should never happen! Expect incorrect results. See LineTrajectory class."
+            print("WARNING: Different number of distances and points, this should never happen! Expect incorrect results. See LineTrajectory class.")
         dat = self.distance_along_trajectory(t)
         if dat == None:
             return None
@@ -67,7 +67,7 @@ class LineTrajectory(object):
             return (1.0-t)*self.distances[i] + t*self.distances[i+1]
 
     def addPoint(self, point):
-        print "adding point to trajectory:", point.x, point.y
+        # print "adding point to trajectory:", point.x, point.y
         self.points.append((point.x, point.y))
         self.update_distances()
         self.mark_dirty()
@@ -81,7 +81,7 @@ class LineTrajectory(object):
         return len(self.points) == 0
 
     def save(self, path):
-        print "Saving trajectory to:", path
+        # print "Saving trajectory to:", path
         data = {}
         data["points"] = []
         for p in self.points:
@@ -96,13 +96,13 @@ class LineTrajectory(object):
         return not self.has_acceleration
 
     def load(self, path):
-        print "Loading trajectory:", path
+        # print "Loading trajectory:", path
         with open(path) as json_file:
             json_data = json.load(json_file)
             for p in json_data["points"]:
                 self.points.append((p["x"], p["y"]))
         self.update_distances()
-        print "Loaded:", len(self.points), "points"
+        print("Loaded:", len(self.points), "points")
         self.mark_dirty()
 
     # build a trajectory class instance from a trajectory message
@@ -111,7 +111,7 @@ class LineTrajectory(object):
             self.points.append((p.position.x, p.position.y))
         self.update_distances()
         self.mark_dirty()
-        print "Loaded new trajectory with:", len(self.points), "points"
+        # print "Loaded new trajectory with:", len(self.points), "points"
 
     def toPoseArray(self):
         traj = PoseArray()
@@ -127,7 +127,7 @@ class LineTrajectory(object):
     def publish_start_point(self, duration=0.0, scale=0.1):
         should_publish = len(self.points) > 0
         if self.visualize and self.start_pub.get_num_connections() > 0:
-            print "Publishing start point"
+            # print "Publishing start point"
             marker = Marker()
             marker.header = self.make_header("/map")
             marker.ns = self.viz_namespace + "/trajectory"
@@ -157,7 +157,7 @@ class LineTrajectory(object):
     def publish_end_point(self, duration=0.0):
         should_publish = len(self.points) > 1
         if self.visualize and self.end_pub.get_num_connections() > 0:
-            print "Publishing end point"
+            # print "Publishing end point"
             marker = Marker()
             marker.header = self.make_header("/map")
             marker.ns = self.viz_namespace + "/trajectory"
@@ -187,7 +187,7 @@ class LineTrajectory(object):
     def publish_trajectory(self, duration=0.0):
         should_publish = len(self.points) > 1
         if self.visualize and self.traj_pub.get_num_connections() > 0:
-            print "Publishing trajectory"
+            # print "Publishing trajectory"
             marker = Marker()
             marker.header = self.make_header("/map")
             marker.ns = self.viz_namespace + "/trajectory"
@@ -213,11 +213,11 @@ class LineTrajectory(object):
             self.traj_pub.publish(marker)
             print('publishing traj')
         elif self.traj_pub.get_num_connections() == 0:
-            print "Not publishing trajectory, no subscribers"
+            print("Not publishing trajectory, no subscribers")
 
     def publish_viz(self, duration=0):
         if not self.visualize:
-            print "Cannot visualize path, not initialized with visualization enabled"
+            # print "Cannot visualize path, not initialized with visualization enabled"
             return
 
         self.publish_start_point(duration=duration)

@@ -33,7 +33,7 @@ class PurePursuit(object):
     def trajectory_callback(self, msg):
         ''' Clears the currently followed trajectory, and loads the new one from the message
         '''
-        print "Receiving new trajectory:", len(msg.poses), "points"
+        print("Receiving new trajectory:", len(msg.poses), "points")
         self.trajectory.clear()
         self.trajectory.fromPoseArray(msg)
         self.trajectory.publish_viz(duration=0.0)
@@ -71,25 +71,36 @@ class PurePursuit(object):
         #rospy.loginfo(["distances: ", distances])
 
         target = None
-        for i in range(i_shortest_distance, len(distances)):
-            intersection = self.line_circle_intersection(self.trajectory.points[i], self.trajectory.points[i+1], carp, self.lookahead)
-            if intersection is not None and len(intersection) != 0:
-                j = 0
-                targets = []
-                while len(targets) < 2:
-                    if intersection is not None and len(intersection) != 0:
-                        for point in intersection:
-                            point = (point[0], point[1]+j)
-                            targets.append(point)
-                    j += 1
-                    if i+j <= len(distances)-1:
-                        intersection = self.line_circle_intersection(self.trajectory.points[i+j], self.trajectory.points[i+j+1], carp, self.lookahead)
-                    else:
-                        break
-                break
+        i = i_shortest_distance
+        # for i in range(i_shortest_distance, len(distances)):
+        intersection = self.line_circle_intersection(self.trajectory.points[i], self.trajectory.points[i+1], carp, self.lookahead)
+        if intersection is not None and len(intersection) != 0:
+            j = 0
+            targets = []
+            while len(targets) < 2:
+                if intersection is not None and len(intersection) != 0:
+                    for point in intersection:
+                        point = (point[0], point[1]+j)
+                        targets.append(point)
+                j += 1
+                if i+j <= len(distances)-1:
+                    intersection = self.line_circle_intersection(self.trajectory.points[i+j], self.trajectory.points[i+j+1], carp, self.lookahead)
+                else:
+                    break
+            target = max(targets, key=lambda x: x[1])[0]
+            # break
         else:
-            return
-        target = max(targets, key=lambda x: x[1])[0]
+            # p1, p2 = line segment, p3 = car position, x = closets point on line segment to x
+            x1, y1 = self.trajectory.points[i]
+            x2, y2 = self.trajectory.points[i+1]
+            x3, y3 = carp
+            dx, dy = x2-x1, y2-y1
+            det = dx*dx + dy*dy
+            a = (dy*(y3-y1)+dx*(x3-x1))/det
+            x =  [x1+a*dx, y1+a*dy]
+            rospy.loginfo(["point on line  :", x, "could not find intersection"])
+            target = x
+        
 
         marker = Marker()
         marker.header.frame_id = "/map"
@@ -145,7 +156,7 @@ class PurePursuit(object):
         drive_cmd.drive.steering_angle = angle
 
         self.drive_pub.publish(drive_cmd)
-        #rospy.loginfo(["end target: ", target])
+        rospy.loginfo(["drive_angle: ", angle, "angle to target", angle_to_point])
 
     def line_circle_intersection(self, p1, p2, pc, r):
         """
