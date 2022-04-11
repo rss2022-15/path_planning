@@ -72,22 +72,22 @@ class PurePursuit(object):
 
         target = None
         i = i_shortest_distance
-        # for i in range(i_shortest_distance, len(distances)):
-        intersection = self.line_circle_intersection(self.trajectory.points[i], self.trajectory.points[i+1], carp, self.lookahead)
-        if intersection is not None and len(intersection) != 0:
-            j = 0
-            targets = []
-            while len(targets) < 2:
-                if intersection is not None and len(intersection) != 0:
-                    for point in intersection:
-                        point = (point[0], point[1]+j)
-                        targets.append(point)
-                j += 1
-                if i+j <= len(distances)-1:
-                    intersection = self.line_circle_intersection(self.trajectory.points[i+j], self.trajectory.points[i+j+1], carp, self.lookahead)
-                else:
-                    break
-            target = max(targets, key=lambda x: x[1])[0]
+        for i in range(i_shortest_distance, len(distances)):
+            intersection = self.line_circle_intersection(self.trajectory.points[i], self.trajectory.points[i+1], carp, self.lookahead)
+            if intersection is not None and len(intersection) != 0:
+                j = 0
+                targets = []
+                while len(targets) < 2:
+                    if intersection is not None and len(intersection) != 0:
+                        for point in intersection:
+                            point = (point[0], point[1]+j)
+                            targets.append(point)
+                    j += 1
+                    if i+j <= len(distances)-1:
+                        intersection = self.line_circle_intersection(self.trajectory.points[i+j], self.trajectory.points[i+j+1], carp, self.lookahead)
+                    else:
+                        break
+                target = max(targets, key=lambda x: x[1])[0]
             # break
         else:
             # p1, p2 = line segment, p3 = car position, x = closets point on line segment to x
