@@ -52,6 +52,7 @@ class PathPlan(object):
     # cost
     # path x, y, yaw
     def map_cb(self, msg):
+        
         self.map = msg
 
     def odom_cb(self, msg):
@@ -75,6 +76,7 @@ class PathPlan(object):
         # reinitialize traj and other stuff and check if other things exist and call path plan
 
     def plan_path(self, start_point, end_point, map):
+        rospy.loginfo([self.map])
         ## CODE FOR PATH PLANNING ##
         self.start_node = Node(self.start[0], self.start[1], self.start[2])
         self.goal_node = Node(self.goal[0], self.goal[1], self.goal[2])

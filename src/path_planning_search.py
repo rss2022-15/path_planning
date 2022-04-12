@@ -4,6 +4,8 @@ import rospy
 import numpy as np
 from geometry_msgs.msg import PoseStamped, PoseArray
 from nav_msgs.msg import Odometry, OccupancyGrid
+from visualization_msgs.msg import Marker
+
 import rospkg
 import time, os
 from utils import LineTrajectory
@@ -40,6 +42,7 @@ class PathPlan(object):
         self.goal_sub = rospy.Subscriber("/move_base_simple/goal", PoseStamped, self.goal_cb, queue_size=10)
         self.traj_pub = rospy.Publisher("/trajectory/current", PoseArray, queue_size=10)
         self.odom_sub = rospy.Subscriber(self.odom_topic, Odometry, self.odom_cb)
+        self.debug_pub = rospy.Publisher("/debug_point_search", Marker, queue_size=1)
 
 
     def map_cb(self, msg):
@@ -72,9 +75,11 @@ class PathPlan(object):
 
     def plan_path(self):
         ## CODE FOR PATH PLANNING ##
-
+        # rospy.loginfo([self.map])
         
         path = self.astar()
+
+        rospy.loginfo([path])
 
         # publish trajectory
         self.traj_pub.publish(path.toPoseArray())
@@ -83,7 +88,27 @@ class PathPlan(object):
         self.trajectory.publish_viz()
 
     def astar(self):
-        start_node = Node(None, self.start)
+        #convert robot position to occpancy map position
+        map_width = self.map.info.width# 1730
+        map_height = self.map.info.height# 1300
+        map_resolution = self.map.info.resolution # 0.0504000000656
+        map_origin_x = self.map.info.origin.position.x
+        map_origin_y = self.map.info.origin.position.y
+        #     position: 
+        #       x: 25.9
+        #       y: 48.5
+        #       z: 0.0
+        # 
+
+        start_x = int((self.start[0] - map_origin_x)/map_resolution - 0.5)
+        start_y = int((self.start[1] - map_origin_y)/map_resolution - 0.5)
+
+        #occupancy grid -> (height -> x , width -> y)
+
+        rospy.loginfo(["start grid pos", [start_x, start_y]])
+
+
+        start_node = Node(None, [start_x, start_y])
         start_node.g = start_node.h = start_node.f = 0
         end_node = Node(None, self.goal)
         end_node.g = end_node.h = end_node.f = 0
@@ -115,11 +140,39 @@ class PathPlan(object):
                 path = []
                 current = current_node
                 while current is not None:
-                    path.append(current.position)
+                    #grid to node 
+                    pos_x = map_origin_x + (current.position[0] + 0.5) * map_resolution
+                    pos_y = map_origin_y + (current.position[1] + 0.5) * map_resolution
+                    path.append([pos_x, pos_y])
                     current = current.parent
                 return path[::-1] # Return reversed path
 
             # Generate children
+            marker = Marker()
+            marker.header.frame_id = "/map"
+            marker.header.stamp = rospy.Time.now()
+
+            marker.type = 2
+            marker.id = 0
+
+            marker.scale.x = 1
+            marker.scale.y = 1
+            marker.scale.z = 1
+
+            marker.color.r = 1.0
+            marker.color.g = 0.0
+            marker.color.b = 0.83
+            marker.color.a = 1.0
+
+            marker.pose.position.x = current_node.position[0]
+            marker.pose.position.y = current_node.position[1]
+            marker.pose.position.z = 0
+            marker.pose.orientation.x = 0.0
+            marker.pose.orientation.y = 0.0
+            marker.pose.orientation.z = 0.0
+            marker.pose.orientation.w = 1.0
+
+            self.debug_pub.publish(marker)
             children = []
             # angle = current_node.position[2] # TODO: Only drive forward
             for new_position in [(0, -1), (0, 1), (-1, 0), (1, 0), (-1, -1), (-1, 1), (1, -1), (1, 1)]: # Adjacent squares
@@ -132,7 +185,9 @@ class PathPlan(object):
                 #     continue
 
                 # Make sure walkable terrain
-                if self.map.data[node_position[0]][node_position[1]] > 80:
+                
+                val = self.map.data[node_position[0]*map_height+node_position[1]]
+                if val < 80 and val >= 0:  
                     continue
 
                 # Create new node
