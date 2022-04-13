@@ -18,8 +18,9 @@ class PurePursuit(object):
     """
     def __init__(self):
         self.odom_topic       = rospy.get_param("~odom_topic")
-        self.speed            = 10. # FILL IN #
-        self.lookahead        = 1.#.*np.log2(self.speed+1) # FILL IN #
+        self.speed            = 5. # FILL IN #
+        self.lookahead        = 2.#.*np.log2(self.speed+1) # FILL IN #
+        self.frac_along_traj  = 0.
         #self.wrap             = # FILL IN #
         self.wheelbase_length = 1. # FILL IN #
         self.last_angle_error = 0
@@ -68,7 +69,15 @@ class PurePursuit(object):
             i += 1
 
         i_shortest_distance = np.argmin(distances)
-        #length_of_traj = self.trajectory.distances[i+1]
+
+        # Look farther when on a long, straight line
+        length_of_traj = self.trajectory.distances[i_shortest_distance+1] - self.trajectory.distances[i_shortest_distance]
+        lookahead_distance = self.lookahead * (np.log10(length_of_traj) + 1)
+
+        # Look shorter when reaching end of trajectory segment
+        lookahead_distance *= 0.7*(1-self.frac_along_traj) + 0.3
+        lookahead_distance = max(lookahead_distance, 1.)
+        #rospy.loginfo((length_of_traj, lookahead_distance))
 
         #rospy.loginfo(["distances: ", distances])
 
@@ -76,8 +85,9 @@ class PurePursuit(object):
         #i = i_shortest_distance
         # Loop through each trajectory segment to find intersection with circle around car
         for i in range(i_shortest_distance, len(distances)):
-            intersection = self.line_circle_intersection(self.trajectory.points[i], self.trajectory.points[i+1], carp, self.lookahead)
+            intersection = self.line_circle_intersection(self.trajectory.points[i], self.trajectory.points[i+1], carp, lookahead_distance)
             if intersection is not None and len(intersection) != 0:
+                first_intersection = i
                 j = 0
                 targets = []
                 while len(targets) < 2:
@@ -87,10 +97,14 @@ class PurePursuit(object):
                             targets.append(point)
                     j += 1
                     if i+j <= len(distances)-1:
-                        intersection = self.line_circle_intersection(self.trajectory.points[i+j], self.trajectory.points[i+j+1], carp, self.lookahead)
+                        intersection = self.line_circle_intersection(self.trajectory.points[i+j], self.trajectory.points[i+j+1], carp, lookahead_distance)
                     else:
                         break
-                target = max(targets, key=lambda x: x[1])[0]
+                # Allow for looping
+                if len(targets) >= 2 and i+j == len(distances) and first_intersection == 0:
+                    target, self.frac_along_traj = targets[0]
+                else:
+                    target, self.frac_along_traj = max(targets, key=lambda x: x[1])
                 break
 
         else:  # No intersection found
@@ -147,7 +161,7 @@ class PurePursuit(object):
         # Find the angle error of the car to the point
         angle_to_point = np.arctan(local_y / local_x)
         #rospy.loginfo(["car orientation:", caro, "angle to point: ", angle_to_point])
-        angle_error = angle_to_point #np.arctan(2.*self.wheelbase_length*np.sin(angle_to_point) / self.lookahead)
+        angle_error = angle_to_point #np.arctan(2.*self.wheelbase_length*np.sin(angle_to_point) / lookahead_distance)
 
         if local_x < 0:
             angle_error = -angle_error
@@ -156,7 +170,7 @@ class PurePursuit(object):
         self.last_angle_error = angle_error
 
         k_1 = 1
-        k_2 = 0.2
+        k_2 = 1
         angle = k_1 * angle_error + k_2 * angle_deriv
 
         drive_cmd.drive.speed = self.speed

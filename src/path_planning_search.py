@@ -76,15 +76,17 @@ class PathPlan(object):
     def plan_path(self):
         ## CODE FOR PATH PLANNING ##
         # rospy.loginfo([self.map])
-        
-        path = self.astar()
 
-        rospy.loginfo([path])
+        path = self.astar()
+        self.trajectory.points = path
+
+        #rospy.loginfo([path])
 
         # publish trajectory
-        self.traj_pub.publish(path.toPoseArray())
+        self.traj_pub.publish(self.trajectory.toPoseArray())
 
         # visualize trajectory Markers
+        self.trajectory.visualize = True
         self.trajectory.publish_viz()
 
     def astar(self):
@@ -94,14 +96,17 @@ class PathPlan(object):
         map_resolution = self.map.info.resolution # 0.0504000000656
         map_origin_x = self.map.info.origin.position.x
         map_origin_y = self.map.info.origin.position.y
+
         #     position: 
         #       x: 25.9
         #       y: 48.5
         #       z: 0.0
         # 
 
-        start_x = int((self.start[0] - map_origin_x)/map_resolution - 0.5)
-        start_y = int((self.start[1] - map_origin_y)/map_resolution - 0.5)
+        start_x = int(self.start[0])#int((self.start[0] - map_origin_x)/map_resolution - 0.5)
+        start_y = int(self.start[1])#int((self.start[1] - map_origin_y)/map_resolution - 0.5)
+        #start_x = int((self.start[0] - map_origin_x)/map_resolution - 0.5)
+        #start_y = int((self.start[1] - map_origin_y)/map_resolution - 0.5)
 
         #occupancy grid -> (height -> x , width -> y)
 
@@ -113,15 +118,25 @@ class PathPlan(object):
         end_node = Node(None, self.goal)
         end_node.g = end_node.h = end_node.f = 0
 
+        local_x, local_y = self.real_to_map((end_node.position[0], end_node.position[1]))
+
+        val = self.map.data[local_x*map_height+local_y]
+        rospy.loginfo([local_x, local_y, val])
+        rospy.loginfo(self.map.info.origin)
+
         # Initialize both open and closed list
         open_list = []
         closed_list = []
 
         # Add the start node
         open_list.append(start_node)
+        rospy.loginfo(end_node.position)
 
-        # Loop until you find the end
-        while len(open_list) > 0:
+        # Loop until you find the end or run out of time
+        time = 0
+        while len(open_list) > 0 and time <= 100:
+            time += 1
+            #rospy.loginfo(len(open_list))
 
             # Get the current node
             current_node = open_list[0]
@@ -136,13 +151,14 @@ class PathPlan(object):
             closed_list.append(current_node)
 
             # Found the goal
-            if current_node == end_node:
+            #rospy.loginfo(current_node.position)
+            if (current_node.position[0] == end_node.position[0]) and (current_node.position[1] == end_node.position[1]):
                 path = []
                 current = current_node
                 while current is not None:
                     #grid to node 
-                    pos_x = map_origin_x + (current.position[0] + 0.5) * map_resolution
-                    pos_y = map_origin_y + (current.position[1] + 0.5) * map_resolution
+                    pos_x = current.position[0]#map_origin_x + (current.position[0] + 0.5) * map_resolution
+                    pos_y = current.position[1]#map_origin_y + (current.position[1] + 0.5) * map_resolution
                     path.append([pos_x, pos_y])
                     current = current.parent
                 return path[::-1] # Return reversed path
@@ -185,9 +201,16 @@ class PathPlan(object):
                 #     continue
 
                 # Make sure walkable terrain
-                
-                val = self.map.data[node_position[0]*map_height+node_position[1]]
-                if val < 80 and val >= 0:  
+
+                #local_x = int((node_position[0] - map_origin_x)/map_resolution - 0.5)
+                #local_y = int((node_position[1] - map_origin_y)/map_resolution - 0.5)
+
+                local_x, local_y = self.real_to_map(node_position)
+
+                val = self.map.data[local_x*map_height+local_y]
+                #rospy.loginfo(val)
+                #rospy.loginfo(np.argwhere([np.array(self.map.data) >= 0]))
+                if val < 80 and val >= 0:
                     continue
 
                 # Create new node
@@ -200,9 +223,11 @@ class PathPlan(object):
             for child in children:
 
                 # Child is on the closed list
-                for closed_child in closed_list:
-                    if child == closed_child:
-                        continue
+                if child in closed_list:
+                    continue
+                #for closed_child in closed_list:
+                    #if child == closed_child:
+                        #continue
 
                 # Create the f, g, and h values
                 child.g = current_node.g + 1
@@ -216,6 +241,38 @@ class PathPlan(object):
 
                 # Add the child to the open list
                 open_list.append(child)
+
+    def real_to_map(self, p):
+        quat = self.map.info.origin.orientation
+        explicit_quat = [quat.x, quat.y, quat.z, quat.w]
+        (origin_roll, origin_pitch, origin_yaw) = tf.transformations.euler_from_quaternion(explicit_quat)
+
+        px_x = p[0]
+        px_y = p[1]
+        local_x = px_x * np.cos(-origin_yaw) - px_y * np.sin(-origin_yaw)
+        local_y = px_y * np.cos(-origin_yaw) + px_x * np.sin(-origin_yaw)
+        px_x -= int(self.map.info.origin.position.x)
+        px_y -= int(self.map.info.origin.position.y)
+        px_x /= self.map.info.resolution
+        px_y /= self.map.info.resolution
+
+        return (int(px_x), int(px_y))
+
+    def map_to_real(self, p):
+        quat = self.map.info.origin.orientation
+        explicit_quat = [quat.x, quat.y, quat.z, quat.w]
+        (origin_roll, origin_pitch, origin_yaw) = tf.transformations.euler_from_quaternion(explicit_quat)
+
+        px_x = p[0]
+        px_y = p[1]
+        px_x *= self.map.info.resolution
+        px_y *= self.map.info.resolution
+        px_x += int(self.map.info.origin.position.x)
+        px_y += int(self.map.info.origin.position.y)
+        local_x = px_x * np.cos(origin_yaw) - px_y * np.sin(origin_yaw)
+        local_y = px_y * np.cos(origin_yaw) + px_x * np.sin(origin_yaw)
+
+        return (local_x, local_y)
 
 if __name__=="__main__":
     rospy.init_node("path_planning")
