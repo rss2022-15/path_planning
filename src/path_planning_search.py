@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env/python
 
 import rospy
 import numpy as np
@@ -47,8 +47,8 @@ class PathPlan(object):
 
     def map_cb(self, msg):
         self.map = msg
-        # if (self.map != None and self.start != None and self.goal != None):
-        #     self.plan_path()
+        if (self.map != None and self.start != None and self.goal != None):
+            self.plan_path()
 
     def odom_cb(self, msg):
         x = int(msg.pose.pose.position.x)
@@ -59,8 +59,8 @@ class PathPlan(object):
 
         self.start = [x, y]
         # reinitialize traj and other stuff and check if other things exist and call path plan
-        # if (self.map != None and self.start != None and self.goal != None):
-        #     self.plan_path()
+        if (self.map != None and self.start != None and self.goal != None):
+            self.plan_path()
 
 
     def goal_cb(self, msg):
@@ -256,14 +256,24 @@ class PathPlan(object):
 
         px_x = p[0]
         px_y = p[1]
-        local_x = px_x * np.cos(-origin_yaw) - px_y * np.sin(-origin_yaw)
-        local_y = px_y * np.cos(-origin_yaw) + px_x * np.sin(-origin_yaw)
-        local_x -= int(self.map.info.origin.position.x)
-        local_y -= int(self.map.info.origin.position.y)
-        local_x /= self.map.info.resolution
-        local_y /= self.map.info.resolution
+        new_pose = np.zeros(3)
+        new_pose[0] = int((px_x - self.map.info.origin.position.x) / self.map.info.resolution)
+        new_pose[1] = int((px_y - self.map.info.origin.position.y) / self.map.info.resolution)
+        rot = np.array([[np.cos(origin_yaw), -np.sin(origin_yaw), 0],
+                        [np.sin(origin_yaw), np.cos(origin_yaw), 0],
+                        [0, 0, 1]])
 
-        return (-int(local_x), -int(local_y))
+        new_pose = np.int64(np.matmul(rot, new_pose))
+
+        # local_x = px_x * np.cos(-origin_yaw) - px_y * np.sin(-origin_yaw)
+        # local_y = px_y * np.cos(-origin_yaw) + px_x * np.sin(-origin_yaw)
+        # local_x -= int(self.map.info.origin.position.x)
+        # local_y -= int(self.map.info.origin.position.y)
+        # local_x /= self.map.info.resolution
+        # local_y /= self.map.info.resolution
+
+        # return (-int(local_x), -int(local_y))
+        return (new_pose[0], new_pose[1])
 
     def map_to_real(self, p):
         quat = self.map.info.origin.orientation
@@ -272,14 +282,25 @@ class PathPlan(object):
 
         px_x = p[0]
         px_y = p[1]
-        px_x *= self.map.info.resolution
-        px_y *= self.map.info.resolution
-        px_x += int(self.map.info.origin.position.x)
-        px_y += int(self.map.info.origin.position.y)
-        local_x = px_x * np.cos(origin_yaw) - px_y * np.sin(origin_yaw)
-        local_y = px_y * np.cos(origin_yaw) + px_x * np.sin(origin_yaw)
+        new_pose = np.zeros(3)
+        new_pose[0] = px_x
+        new_pose[1] = px_y
+        rot = np.array([[np.cos(origin_yaw), np.sin(origin_yaw), 0],
+                        [-np.sin(origin_yaw), np.cos(origin_yaw), 0],
+                        [0, 0, 1]])
+        new_pose = np.matmul(rot, new_pose)
+        new_pose[0] = new_pose[0] * self.map.info.resolution + self.map.info.origin.position.x
+        new_pose[1] = new_pose[1] * self.map.info.resolution + self.map.info.origin.position.y
+        return (new_pose[0], new_pose[1])
 
-        return (local_x, local_y)
+        # px_x *= self.map.info.resolution
+        # px_y *= self.map.info.resolution
+        # px_x += int(self.map.info.origin.position.x)
+        # px_y += int(self.map.info.origin.position.y)
+        # local_x = px_x * np.cos(origin_yaw) - px_y * np.sin(origin_yaw)
+        # local_y = px_y * np.cos(origin_yaw) + px_x * np.sin(origin_yaw)
+
+        # return (local_x, local_y)
 
 if __name__=="__main__":
     rospy.init_node("path_planning")
