@@ -18,7 +18,7 @@ class PurePursuit(object):
     """
     def __init__(self):
         self.odom_topic       = rospy.get_param("~odom_topic")
-        self.speed            = 10. # FILL IN #
+        self.speed            = 1. # FILL IN #
         self.lookahead        = 2.#.*np.log2(self.speed+1) # FILL IN #
         self.frac_along_traj  = 0.
         #self.wrap             = # FILL IN #
@@ -87,7 +87,9 @@ class PurePursuit(object):
         target = None
         #i = i_shortest_distance
         # Loop through each trajectory segment to find intersection with circle around car
-        for i in range(i_shortest_distance, len(distances)):
+        for i in xrange(i_shortest_distance-1, len(distances)):
+            if i == i_shortest_distance-1:
+                i = 0
             intersection = self.line_circle_intersection(self.trajectory.points[i], self.trajectory.points[i+1], carp, lookahead_distance)
             if intersection is not None and len(intersection) != 0:
                 first_intersection = i
