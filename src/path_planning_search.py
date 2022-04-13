@@ -47,8 +47,8 @@ class PathPlan(object):
 
     def map_cb(self, msg):
         self.map = msg
-        if (self.map != None and self.start != None and self.goal != None):
-            self.plan_path()
+        # if (self.map != None and self.start != None and self.goal != None):
+        #     self.plan_path()
 
     def odom_cb(self, msg):
         x = int(msg.pose.pose.position.x)
@@ -59,8 +59,8 @@ class PathPlan(object):
 
         self.start = [x, y]
         # reinitialize traj and other stuff and check if other things exist and call path plan
-        if (self.map != None and self.start != None and self.goal != None):
-            self.plan_path()
+        # if (self.map != None and self.start != None and self.goal != None):
+        #     self.plan_path()
 
 
     def goal_cb(self, msg):
@@ -110,7 +110,7 @@ class PathPlan(object):
 
         #occupancy grid -> (height -> x , width -> y)
 
-        rospy.loginfo(["start grid pos", [start_x, start_y]])
+        # rospy.loginfo(["start grid pos", [start_x, start_y]])
 
 
         start_node = Node(None, [start_x, start_y])
@@ -121,8 +121,10 @@ class PathPlan(object):
         local_x, local_y = self.real_to_map((end_node.position[0], end_node.position[1]))
         
         val = self.map.data[local_x*map_height+local_y]
+        # rospy.loginfo([end_node.position[0], end_node.position[1]])
         rospy.loginfo([local_x, local_y, val])
-        rospy.loginfo(["origin:", self.map.info.origin])
+        
+        # rospy.loginfo(["origin:", self.map.info.origin])
 
         # Initialize both open and closed list
         open_list = []
@@ -135,6 +137,8 @@ class PathPlan(object):
         # Loop until you find the end or run out of time
         time = 0
         while len(open_list) > 0 and time <= 1000:
+            
+
             time += 1
             #rospy.loginfo(len(open_list))
 
@@ -163,7 +167,7 @@ class PathPlan(object):
                     current = current.parent
                 return path[::-1] # Return reversed path
 
-            # Generate children
+
             marker = Marker()
             marker.header.frame_id = "/map"
             marker.header.stamp = rospy.Time.now()
@@ -171,9 +175,9 @@ class PathPlan(object):
             marker.type = 2
             marker.id = 0
 
-            marker.scale.x = 1
-            marker.scale.y = 1
-            marker.scale.z = 1
+            marker.scale.x = .2
+            marker.scale.y = .2
+            marker.scale.z = .05
 
             marker.color.r = 1.0
             marker.color.g = 0.0
@@ -188,7 +192,9 @@ class PathPlan(object):
             marker.pose.orientation.z = 0.0
             marker.pose.orientation.w = 1.0
 
-            self.debug_pub.publish(marker)
+            self.debug_pub.publish(marker)      
+            # Generate children
+            
             children = []
             # angle = current_node.position[2] # TODO: Only drive forward
             for new_position in [(0, -1), (0, 1), (-1, 0), (1, 0), (-1, -1), (-1, 1), (1, -1), (1, 1)]: # Adjacent squares
