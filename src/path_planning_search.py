@@ -252,12 +252,12 @@ class PathPlan(object):
         px_y = p[1]
         local_x = px_x * np.cos(-origin_yaw) - px_y * np.sin(-origin_yaw)
         local_y = px_y * np.cos(-origin_yaw) + px_x * np.sin(-origin_yaw)
-        px_x -= int(self.map.info.origin.position.x)
-        px_y -= int(self.map.info.origin.position.y)
-        px_x /= self.map.info.resolution
-        px_y /= self.map.info.resolution
+        local_x -= int(self.map.info.origin.position.x)
+        local_y -= int(self.map.info.origin.position.y)
+        local_x /= self.map.info.resolution
+        local_y /= self.map.info.resolution
 
-        return (-int(px_x), -int(px_y))
+        return (-int(local_x), -int(local_y))
 
     def map_to_real(self, p):
         quat = self.map.info.origin.orientation
