@@ -18,7 +18,7 @@ class PurePursuit(object):
     """
     def __init__(self):
         self.odom_topic       = rospy.get_param("~odom_topic")
-        self.speed            = 5. # FILL IN #
+        self.speed            = 10. # FILL IN #
         self.lookahead        = 2.#.*np.log2(self.speed+1) # FILL IN #
         self.frac_along_traj  = 0.
         #self.wrap             = # FILL IN #
@@ -30,6 +30,8 @@ class PurePursuit(object):
         self.drive_pub = rospy.Publisher("/drive", AckermannDriveStamped, queue_size=1)
         self.car_sub = rospy.Subscriber(self.odom_topic, Odometry, self.odom_callback, queue_size=1)
         self.debug_pub = rospy.Publisher("/debug_point", Marker, queue_size=1)
+
+        self.errors = []
 
     def trajectory_callback(self, msg):
         ''' Clears the currently followed trajectory, and loads the new one from the message
@@ -69,6 +71,7 @@ class PurePursuit(object):
             i += 1
 
         i_shortest_distance = np.argmin(distances)
+        self.errors.append(distances[i_shortest_distance])
 
         # Look farther when on a long, straight line
         length_of_traj = self.trajectory.distances[i_shortest_distance+1] - self.trajectory.distances[i_shortest_distance]
@@ -105,6 +108,12 @@ class PurePursuit(object):
                     target, self.frac_along_traj = targets[0]
                 else:
                     target, self.frac_along_traj = max(targets, key=lambda x: x[1])
+
+                # Print average error when we reach the end of track
+                if first_intersection == len(distances)-1 and self.frac_along_traj > 0.9 and len(self.errors) > 1:
+                    rospy.loginfo(["Average error: ", np.mean(self.errors), len(self.errors)])
+                    self.errors = []
+
                 break
 
         else:  # No intersection found

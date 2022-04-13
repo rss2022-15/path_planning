@@ -119,10 +119,10 @@ class PathPlan(object):
         end_node.g = end_node.h = end_node.f = 0
 
         local_x, local_y = self.real_to_map((end_node.position[0], end_node.position[1]))
-
+        
         val = self.map.data[local_x*map_height+local_y]
         rospy.loginfo([local_x, local_y, val])
-        rospy.loginfo(self.map.info.origin)
+        rospy.loginfo(["origin:", self.map.info.origin])
 
         # Initialize both open and closed list
         open_list = []
@@ -134,7 +134,7 @@ class PathPlan(object):
 
         # Loop until you find the end or run out of time
         time = 0
-        while len(open_list) > 0 and time <= 100:
+        while len(open_list) > 0 and time <= 1000:
             time += 1
             #rospy.loginfo(len(open_list))
 
@@ -241,6 +241,7 @@ class PathPlan(object):
 
                 # Add the child to the open list
                 open_list.append(child)
+        rospy.loginfo(time)
 
     def real_to_map(self, p):
         quat = self.map.info.origin.orientation
@@ -256,7 +257,7 @@ class PathPlan(object):
         px_x /= self.map.info.resolution
         px_y /= self.map.info.resolution
 
-        return (int(px_x), int(px_y))
+        return (-int(px_x), -int(px_y))
 
     def map_to_real(self, p):
         quat = self.map.info.origin.orientation
