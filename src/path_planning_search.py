@@ -14,6 +14,7 @@ from utils import LineTrajectory
 import tf.transformations
 import random
 import math
+from skimage import morphology
 
 class Node():
     """A node class for A* Pathfinding"""
@@ -48,33 +49,35 @@ class PathPlan(object):
 
     def map_cb(self, msg):
         self.map = msg
+        self.map_width = self.map.info.width
+        self.map_height = self.map.info.height
+        self.map_resolution = self.map.info.resolution
+        self.map_origin_x = self.map.info.origin.position.x
+        self.map_origin_y = self.map.info.origin.position.y
+
+        quat = self.map.info.origin.orientation
+        explicit_quat = [quat.x, quat.y, quat.z, quat.w]
+        (origin_roll, origin_pitch, self.origin_yaw) = tf.transformations.euler_from_quaternion(explicit_quat)
+        data = np.array([self.map.data]).reshape((self.map_height, self.map_width))
+        self.map_dilated = morphology.dilation(data, selem=np.ones((8,8)))
+
         if (self.map != None and self.start != None and self.goal != None):
             self.plan_path()
 
     def odom_cb(self, msg):
-        x = int(msg.pose.pose.position.x)
-        y = int(msg.pose.pose.position.y)
-        quat = msg.pose.pose.orientation
-        explicit_quat = [quat.x, quat.y, quat.z, quat.w]
-        (roll, pitch, yaw) = tf.transformations.euler_from_quaternion(explicit_quat)
+        x = msg.pose.pose.position.x
+        y = msg.pose.pose.position.y
 
         if (self.start is None and self.map is not None and self.goal is not None):
             self.start = [x, y]
             rospy.loginfo("got start and will plan")
             rospy.loginfo(self.start)
             self.plan_path()
-        # reinitialize traj and other stuff and check if other things exist and call path plan
-        # if (self.map != None and self.start != None and self.goal != None):
-        #     self.plan_path()
-
 
     def goal_cb(self, msg):
         pos = msg.pose.position
-        quat = msg.pose.orientation
-        explicit_quat = [quat.x, quat.y, quat.z, quat.w]
-        (roll, pitch, yaw) = tf.transformations.euler_from_quaternion(explicit_quat)
 
-        self.goal = [int(pos.x), int(pos.y)]
+        self.goal = [pos.x, pos.y]
         rospy.loginfo("got new goal ")
         rospy.loginfo(self.goal)
         # if (self.map != None and self.start != None and self.goal != None):
@@ -82,12 +85,8 @@ class PathPlan(object):
 
     def plan_path(self):
         ## CODE FOR PATH PLANNING ##
-        # rospy.loginfo([self.map])
-
         path = self.astar()
         self.trajectory.points = path
-
-        #rospy.loginfo([path])
 
         # publish trajectory
         self.traj_pub.publish(self.trajectory.toPoseArray())
@@ -97,45 +96,18 @@ class PathPlan(object):
         self.trajectory.publish_viz()
 
     def astar(self):
-        #convert robot position to occpancy map position
-        map_width = self.map.info.width# 1730
-        map_height = self.map.info.height# 1300
-        map_resolution = self.map.info.resolution # 0.0504000000656
-        map_origin_x = self.map.info.origin.position.x
-        map_origin_y = self.map.info.origin.position.y
-
-        #     position: 
-        #       x: 25.9
-        #       y: 48.5
-        #       z: 0.0
-        # 
-
         start_map = self.real_to_map(self.start)
-        # start_x = int(self.start[0])
-        # start_y = int(self.start[1])
         start_x = start_map[0]
         start_y = start_map[1]
 
-        goal_map = self.real_to_map(self.goal)
-
         #occupancy grid -> (height -> x , width -> y)
-
-        # rospy.loginfo(["start grid pos", [start_x, start_y]])
-
-        # map frame
-        # start_node = Node(None, [start_x, start_y])
+        goal_map = self.real_to_map(self.goal)
+        # pixel frame
         start_node = Node(None, [start_x, start_y])
         start_node.g = start_node.h = start_node.f = 0
-        # end_node = Node(None, self.goal)
+
         end_node = Node(None, goal_map)
         end_node.g = end_node.h = end_node.f = 0
-
-        # local_x, local_y = self.real_to_map((end_node.position[0], end_node.position[1]))
-        # val = self.map.data[local_x*map_height+local_y]
-        # rospy.loginfo([end_node.position[0], end_node.position[1]])
-        # rospy.loginfo([local_x, local_y, val])
-        
-        # rospy.loginfo(["origin:", self.map.info.origin])
 
         # Initialize both open and closed list
         open_list = []
@@ -143,54 +115,48 @@ class PathPlan(object):
 
         # Add the start node
         open_list.append(start_node)
-        # rospy.loginfo(end_node.position)
 
         # Loop until you find the end or run out of time
         time = 0
         # while len(open_list) > 0 and time <= 1000:
         while len(open_list) > 0:
             time += 1
-            #rospy.loginfo(len(open_list))
 
             # Get the current node
             current_node = open_list[0]
-
             current_index = 0
             for index, item in enumerate(open_list):
                 if item.f < current_node.f:
                     current_node = item
                     current_index = index
 
+            rospy.loginfo("current node")
+            rospy.loginfo(current_node.position)
+            rospy.loginfo("its f value")
+            rospy.loginfo(current_node.f)
+
             # Pop current off open list, add to closed list
             open_list.pop(current_index)
-
-            for closed_node in closed_list:
-                # open_node_map = self.real_to_map(open_node.position)
-                # child_map = self.real_to_map(child.position)
-                if (current_node.position[0] == closed_node.position[0]) and (current_node.position[1] == closed_node.position[1]):
-                    continue
-
-            
             closed_list.append(current_node)
-            # rospy.loginfo("current node pos ")
-            # rospy.loginfo(current_node.position)
-            # rospy.loginfo("end node pos ")
-            # rospy.loginfo(end_node.position)
+
+            # for closed_node in closed_list:
+            #     # open_node_map = self.real_to_map(open_node.position)
+            #     # child_map = self.real_to_map(child.position)
+            #     if (current_node.position[0] == closed_node.position[0]) and (current_node.position[1] == closed_node.position[1]):
+            #         continue
 
             # Found the goal
-            #rospy.loginfo(current_node.position)
             if (current_node.position[0] == end_node.position[0]) and (current_node.position[1] == end_node.position[1]):
                 path = []
                 current = current_node
                 while current is not None:
                     #grid to node 
-                    pos_x = current.position[0]#map_origin_x + (current.position[0] + 0.5) * map_resolution
-                    pos_y = current.position[1]#map_origin_y + (current.position[1] + 0.5) * map_resolution
+                    pos_x = current.position[0]
+                    pos_y = current.position[1]
                     path.append(self.map_to_real([pos_x, pos_y]))
                     current = current.parent
                 rospy.loginfo("hello cna anyone hear me")
                 return path[::-1] # Return reversed path
-
 
             marker = Marker()
             marker.header.frame_id = "/map"
@@ -221,38 +187,31 @@ class PathPlan(object):
             
             children = []
             # angle = current_node.position[2] # TODO: Only drive forward
-            for new_position in [(0, -1), (0, 1), (-1, 0), (1, 0), (-1, -1), (-1, 1), (1, -1), (1, 1)]: # Adjacent squares
+            # for new_position in [(0, -1), (0, 1), (-1, 0), (1, 0), (-1, -1), (-1, 1), (1, -1), (1, 1)]: # Adjacent squares
 
+            child_offsets = []
+            for i in range(-5, 6):
+                for j in range(-5, 6):
+                    child_offsets.append((i,j))
+
+            # for new_position in [(0, -3), (0, 3), (-3, 0), (3, 0)]:
+            for new_position in child_offsets:
                 # Get node position
-                # curr_node_position_map = self.real_to_map(current_node.position)
                 node_position = (current_node.position[0] + new_position[0], current_node.position[1] + new_position[1])
-                # node_position = (curr_node_position_map[0] + new_position[0], curr_node_position_map[1] + new_position[1])
-
-                # Make sure walkable terrain
-
-                #local_x = int((node_position[0] - map_origin_x)/map_resolution - 0.5)
-                #local_y = int((node_position[1] - map_origin_y)/map_resolution - 0.5)
-
-                # local_x, local_y = self.real_to_map(node_position)
                 local_x, local_y = node_position
 
                 # # Make sure within range
-                # if node_position[0] > self.map.info.height or node_position[0] < 0 or node_position[1] > (len(self.map[len(self.map)-1]) -1) or node_position[1] < 0:
-                #     continue
-                if local_x > map_height or local_x < 0 or local_y > map_width or local_y < 0:
+                if local_x > self.map_height-1 or local_x < 0 or local_y > self.map_width-1 or local_y < 0:
                     rospy.loginfo("out of bounds, continuing")
                     continue
 
-                # val = self.map.data[local_x*map_height+local_y]
-                val = self.map.data[local_x*map_width+local_y]
-                #rospy.loginfo(val)
-                #rospy.loginfo(np.argwhere([np.array(self.map.data) >= 0]))
-                # if val < 80 and val >= 0:
+                # Make sure walkable terrain
+                # val = self.map.data[local_x*self.map_width+local_y]
+                val = self.map_dilated[local_y, local_x]
                 if val > 0:
                     continue
 
                 # Create new node
-                # new_node = Node(current_node, self.map_to_real(node_position))
                 new_node = Node(current_node, node_position)
 
                 # Append
@@ -262,23 +221,37 @@ class PathPlan(object):
             for child in children:
 
                 # Child is on the closed list
-                if child in closed_list:
-                    continue
+                exists = False
                 for closed_child in closed_list:
                     if child.position[0] == closed_child.position[0] and child.position[1] == closed_child.position[1]:
-                        continue
+                        exists = True
+                        break
+                if exists:
+                    continue
+                exists = False
 
                 # Create the f, g, and h values
-                child.g = current_node.g + 1
-                child.h = ((child.position[0] - end_node.position[0]) ** 2) + ((child.position[1] - end_node.position[1]) ** 2)
-                child.f = child.g + child.h
+                # child.g = current_node.g + 1
+                # next_cost = current_node.g + math.sqrt((child.position[0] - end_node.position[0]) ** 2) + ((child.position[1] - end_node.position[1]) ** 2)
+                # next_cost = current_node.g + (child.position[0] - current_node.position[0])**2 + (child.position[1] - current_node.position[1])**2
+                next_cost = current_node.g + 1
+                child.g = next_cost
+                priority = next_cost + np.abs(child.position[0] - end_node.position[0]) + np.abs(child.position[1] - end_node.position[1])
+                # child.g = current_node.g + ((child.position[0] - end_node.position[0]) ** 2) + ((child.position[1] - end_node.position[1]) ** 2)
+                # child.h = ((child.position[0] - end_node.position[0]) ** 2) + ((child.position[1] - end_node.position[1]) ** 2)
+                # child.h = np.abs(child.position[0] - end_node.position[0]) + np.abs(child.position[1] - end_node.position[1])
+                # child.f = child.g + child.h
+                child.f = priority
 
                 # Child is already in the open list
                 for open_node in open_list:
-                    # open_node_map = self.real_to_map(open_node.position)
-                    # child_map = self.real_to_map(child.position)
-                    if (child.position[0] == open_node.position[0]) and (child.position[1] == open_node.position[1]) and child.g > open_node.g:
-                        continue
+                    # if (child.position[0] == open_node.position[0]) and (child.position[1] == open_node.position[1]) and child.g > open_node.g:
+                    #     continue
+                    if (child.position[0] == open_node.position[0]) and (child.position[1] == open_node.position[1]):
+                        exists = True
+                        break
+                if exists:
+                    continue
 
                 # Add the child to the open list
                 open_list.append(child)
@@ -286,57 +259,35 @@ class PathPlan(object):
         rospy.loginfo(time)
 
     def real_to_map(self, p):
-        quat = self.map.info.origin.orientation
-        explicit_quat = [quat.x, quat.y, quat.z, quat.w]
-        (origin_roll, origin_pitch, origin_yaw) = tf.transformations.euler_from_quaternion(explicit_quat)
-
         px_x = p[0]
         px_y = p[1]
+
         new_pose = np.zeros(3)
-        new_pose[0] = int((px_x - self.map.info.origin.position.x) / self.map.info.resolution)
-        new_pose[1] = int((px_y - self.map.info.origin.position.y) / self.map.info.resolution)
-        rot = np.array([[np.cos(origin_yaw), -np.sin(origin_yaw), 0],
-                        [np.sin(origin_yaw), np.cos(origin_yaw), 0],
+        new_pose[0] = (px_x - self.map_origin_x) / self.map_resolution
+        new_pose[1] = (px_y - self.map_origin_y) / self.map_resolution
+
+        rot = np.array([[np.cos(self.origin_yaw), -np.sin(self.origin_yaw), 0],
+                        [np.sin(self.origin_yaw), np.cos(self.origin_yaw), 0],
                         [0, 0, 1]])
 
         new_pose = np.int64(np.matmul(rot, new_pose))
-
-        # local_x = px_x * np.cos(-origin_yaw) - px_y * np.sin(-origin_yaw)
-        # local_y = px_y * np.cos(-origin_yaw) + px_x * np.sin(-origin_yaw)
-        # local_x -= int(self.map.info.origin.position.x)
-        # local_y -= int(self.map.info.origin.position.y)
-        # local_x /= self.map.info.resolution
-        # local_y /= self.map.info.resolution
-
-        # return (-int(local_x), -int(local_y))
         return (new_pose[0], new_pose[1])
 
     def map_to_real(self, p):
-        quat = self.map.info.origin.orientation
-        explicit_quat = [quat.x, quat.y, quat.z, quat.w]
-        (origin_roll, origin_pitch, origin_yaw) = tf.transformations.euler_from_quaternion(explicit_quat)
-
         px_x = p[0]
         px_y = p[1]
+
         new_pose = np.zeros(3)
         new_pose[0] = px_x
         new_pose[1] = px_y
-        rot = np.array([[np.cos(origin_yaw), np.sin(origin_yaw), 0],
-                        [-np.sin(origin_yaw), np.cos(origin_yaw), 0],
+
+        rot = np.array([[np.cos(self.origin_yaw), np.sin(self.origin_yaw), 0],
+                        [-np.sin(self.origin_yaw), np.cos(self.origin_yaw), 0],
                         [0, 0, 1]])
         new_pose = np.matmul(rot, new_pose)
-        new_pose[0] = new_pose[0] * self.map.info.resolution + self.map.info.origin.position.x
-        new_pose[1] = new_pose[1] * self.map.info.resolution + self.map.info.origin.position.y
+        new_pose[0] = new_pose[0] * self.map_resolution + self.map_origin_x
+        new_pose[1] = new_pose[1] * self.map_resolution + self.map_origin_y
         return (new_pose[0], new_pose[1])
-
-        # px_x *= self.map.info.resolution
-        # px_y *= self.map.info.resolution
-        # px_x += int(self.map.info.origin.position.x)
-        # px_y += int(self.map.info.origin.position.y)
-        # local_x = px_x * np.cos(origin_yaw) - px_y * np.sin(origin_yaw)
-        # local_y = px_y * np.cos(origin_yaw) + px_x * np.sin(origin_yaw)
-
-        # return (local_x, local_y)
 
 if __name__=="__main__":
     rospy.init_node("path_planning")
