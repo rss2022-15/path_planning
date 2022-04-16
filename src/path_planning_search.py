@@ -3,7 +3,7 @@
 from threading import local
 import rospy
 import numpy as np
-from geometry_msgs.msg import PoseStamped, PoseArray
+from geometry_msgs.msg import PoseStamped, PoseArray, Pose
 from nav_msgs.msg import Odometry, OccupancyGrid
 from visualization_msgs.msg import Marker
 
@@ -61,18 +61,22 @@ class PathPlan(object):
         data = np.array([self.map.data]).reshape((self.map_height, self.map_width))
         self.map_dilated = morphology.dilation(data, selem=np.ones((8,8)))
 
-        if (self.map != None and self.start != None and self.goal != None):
-            self.plan_path()
+        # if (self.map != None and self.start != None and self.goal != None):
+        #     self.plan_path()
 
     def odom_cb(self, msg):
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
 
-        if (self.start is None and self.map is not None and self.goal is not None):
-            self.start = [x, y]
-            rospy.loginfo("got start and will plan")
-            rospy.loginfo(self.start)
-            self.plan_path()
+        # if (self.start is None and self.map is not None and self.goal is not None):
+        #     self.start = [x, y]
+        #     rospy.loginfo("got start and will plan")
+        #     rospy.loginfo(self.start)
+        #     self.plan_path()
+        if self.map is None:
+            return
+
+        self.start = [x,y]
 
     def goal_cb(self, msg):
         pos = msg.pose.position
@@ -80,6 +84,8 @@ class PathPlan(object):
         self.goal = [pos.x, pos.y]
         rospy.loginfo("got new goal ")
         rospy.loginfo(self.goal)
+        if (self.map is not None and self.start is not None):
+            self.plan_path()
         # if (self.map != None and self.start != None and self.goal != None):
         #     self.plan_path()
 
@@ -130,10 +136,10 @@ class PathPlan(object):
                     current_node = item
                     current_index = index
 
-            rospy.loginfo("current node")
-            rospy.loginfo(current_node.position)
-            rospy.loginfo("its f value")
-            rospy.loginfo(current_node.f)
+            # rospy.loginfo("current node")
+            # rospy.loginfo(current_node.position)
+            # rospy.loginfo("its f value")
+            # rospy.loginfo(current_node.f)
 
             # Pop current off open list, add to closed list
             open_list.pop(current_index)
@@ -147,15 +153,26 @@ class PathPlan(object):
 
             # Found the goal
             if (current_node.position[0] == end_node.position[0]) and (current_node.position[1] == end_node.position[1]):
+                # traj_lol = PoseArray()
+                # traj_lol.header.frame_id = "/map"
+                # traj_lol.header.stamp = rospy.Time.now()
+                # traj_lol.poses = []
                 path = []
                 current = current_node
                 while current is not None:
                     #grid to node 
                     pos_x = current.position[0]
                     pos_y = current.position[1]
-                    path.append(self.map_to_real([pos_x, pos_y]))
+                    real_x, real_y = self.map_to_real([pos_x, pos_y])
+                    # thankunext = Pose()
+                    # thankunext.position.x = real_x
+                    # thankunext.position.y = real_y
+                    # path.append(thankunext)
+                    path.append([real_x, real_y])
                     current = current.parent
                 rospy.loginfo("hello cna anyone hear me")
+                # traj_lol.poses = path[::-1]
+                # self.traj_pub.publish(traj_lol)
                 return path[::-1] # Return reversed path
 
             marker = Marker()
@@ -201,7 +218,8 @@ class PathPlan(object):
                 local_x, local_y = node_position
 
                 # # Make sure within range
-                if local_x > self.map_height-1 or local_x < 0 or local_y > self.map_width-1 or local_y < 0:
+                # if local_x > self.map_height-1 or local_x < 0 or local_y > self.map_width-1 or local_y < 0:
+                if local_x > self.map_width-1 or local_x < 0 or local_y > self.map_height-1 or local_y < 0:
                     rospy.loginfo("out of bounds, continuing")
                     continue
 
@@ -234,9 +252,15 @@ class PathPlan(object):
                 # child.g = current_node.g + 1
                 # next_cost = current_node.g + math.sqrt((child.position[0] - end_node.position[0]) ** 2) + ((child.position[1] - end_node.position[1]) ** 2)
                 # next_cost = current_node.g + (child.position[0] - current_node.position[0])**2 + (child.position[1] - current_node.position[1])**2
-                next_cost = current_node.g + 1
+
+                # this does work below
+                # next_cost = current_node.g + 1
+                # child.g = next_cost
+                # priority = next_cost + np.abs(child.position[0] - end_node.position[0]) + np.abs(child.position[1] - end_node.position[1])
+
+                next_cost = current_node.g + np.abs(child.position[0] - current_node.position[0]) + np.abs(child.position[1] - current_node.position[1])
                 child.g = next_cost
-                priority = next_cost + np.abs(child.position[0] - end_node.position[0]) + np.abs(child.position[1] - end_node.position[1])
+                priority = next_cost + (child.position[0] - end_node.position[0]) ** 2 + (child.position[1] - end_node.position[1]) ** 2
                 # child.g = current_node.g + ((child.position[0] - end_node.position[0]) ** 2) + ((child.position[1] - end_node.position[1]) ** 2)
                 # child.h = ((child.position[0] - end_node.position[0]) ** 2) + ((child.position[1] - end_node.position[1]) ** 2)
                 # child.h = np.abs(child.position[0] - end_node.position[0]) + np.abs(child.position[1] - end_node.position[1])
