@@ -11,6 +11,7 @@ import dubins
 import tf.transformations
 import random
 import math
+from skimage import morphology
 
 
 class Node:
@@ -35,8 +36,14 @@ class PathPlan(object):
         self.goal = None
         self.x_range = None
         self.y_range = None
+        self.map_dilated = None
 
-        self.ITER_MAX = 300    # no fukin clu my doods
+        self.turn_radius = 1.0      # TODO: what the fuk
+        self.step_size = 1        # TODO: also what the fuk
+        self.step_len = 10.0        # TODO: wtf
+        self.search_radius = 50.0   # TODO: also wtf
+
+        self.ITER_MAX = 1400    # no fukin clu my doods
 
         self.odom_topic = rospy.get_param("~odom_topic")
         self.map_sub = rospy.Subscriber("/map", OccupancyGrid, self.map_cb)
@@ -52,18 +59,36 @@ class PathPlan(object):
     # cost
     # path x, y, yaw
     def map_cb(self, msg):
-        
         self.map = msg
+        self.map_width = self.map.info.width
+        self.map_height = self.map.info.height
+        self.map_resolution = self.map.info.resolution
+        self.map_origin_x = self.map.info.origin.position.x
+        self.map_origin_y = self.map.info.origin.position.y
+
+        data = np.array([self.map.data]).reshape((self.map_height, self.map_width))
+        self.map_dilated = morphology.dilation(data, selem=np.ones((8,8)))
+
+        self.x_range = self.map_width
+        self.y_range = self.map_height
+        if (self.map != None and self.start != None and self.goal != None):
+            self.plan_path()
 
     def odom_cb(self, msg):
-        x = msg.pose.pose.position.x
-        y = msg.pose.pose.position.y
+        x = int(msg.pose.pose.position.x)
+        y = int(msg.pose.pose.position.y)
         quat = msg.pose.pose.orientation
         explicit_quat = [quat.x, quat.y, quat.z, quat.w]
         (roll, pitch, yaw) = tf.transformations.euler_from_quaternion(explicit_quat)
 
-        self.start = [x, y, yaw]
+        if (self.start is None and self.map is not None and self.goal is not None):
+            self.start = [x, y, yaw]
+            rospy.loginfo("got start and will plan")
+            rospy.loginfo(self.start)
+            self.plan_path()
         # reinitialize traj and other stuff and check if other things exist and call path plan
+        # if (self.map != None and self.start != None and self.goal != None):
+        #     self.plan_path()
 
 
     def goal_cb(self, msg):
@@ -72,19 +97,21 @@ class PathPlan(object):
         explicit_quat = [quat.x, quat.y, quat.z, quat.w]
         (roll, pitch, yaw) = tf.transformations.euler_from_quaternion(explicit_quat)
 
-        self.goal = [pos.x, pos.y, yaw]
-        # reinitialize traj and other stuff and check if other things exist and call path plan
+        self.goal = [int(pos.x), int(pos.y), yaw]
+        rospy.loginfo("got new goal ")
+        rospy.loginfo(self.goal)
 
-    def plan_path(self, start_point, end_point, map):
+    def plan_path(self):
         rospy.loginfo([self.map])
         ## CODE FOR PATH PLANNING ##
-        self.start_node = Node(self.start[0], self.start[1], self.start[2])
-        self.goal_node = Node(self.goal[0], self.goal[1], self.goal[2])
+        start_map = self.real_to_map(self.start)
+        goal_map = self.real_to_map(self.goal)
+        self.start_node = Node(int(start_map[0]), int(start_map[1]), self.start[2])
+        self.goal_node = Node(int(goal_map[0]), int(goal_map[1]), self.goal[2])
 
-        self.turn_radius = 1.0      # TODO: what the fuk
-        self.step_size = 0.5        # TODO: also what the fuk
-        self.step_len = 30.0        # TODO: wtf
-        self.search_radius = 50.0   # TODO: also wtf
+        
+
+        # start_map = self.real_to_map(self.start)
 
         self.V = [self.start_node]
         self.path = None
@@ -94,10 +121,14 @@ class PathPlan(object):
             rand_node = self.sample()
             near_node = self.nearest(rand_node)
             new_node = self.steer(near_node, rand_node)
-
+            print("checking for is_collision")
             if new_node and not self.is_collision(new_node):
-                near_indices = self.Near(new_node)
+                print("no collision")
+
+                near_indices = self.near(new_node)
+                print("near incicies", near_indices)
                 new_node = self.choose_parent(new_node, near_indices)
+                print("is new node", new_node)
 
                 if new_node:
                     self.V.append(new_node)
@@ -105,6 +136,7 @@ class PathPlan(object):
 
         last_index = self.best_goal()
         path = self.generate_final(last_index)
+        self.trajectory.points = path
 
         # publish trajectory
         self.traj_pub.publish(self.trajectory.toPoseArray())
@@ -113,7 +145,7 @@ class PathPlan(object):
         self.trajectory.publish_viz()
 
     def sample(self):
-        if random.random() > self.goal_sample_rate:
+        if random.random() > 0.1: #self.goal_sample_rate:
             return Node(random.uniform(0, self.x_range), random.uniform(0, self.y_range), random.uniform(-math.pi, math.pi))
         else:
             return self.goal_node
@@ -124,11 +156,13 @@ class PathPlan(object):
     def steer(self, near, rand):
         q0 = (near.x, near.y, near.yaw)
         q1 = (rand.x, rand.y, rand.yaw)
+        print(q0)
 
-        path = dubins.shortest_path(q0, q0, self.turn_radius)
+        path = dubins.shortest_path(q0, q1, self.turn_radius)
         configurations, _ = path.sample_many(self.step_size)
 
         if len(configurations) <= 1:
+            print("config < 1")
             return None
 
         new_node = Node(configurations[-1][0], configurations[-1][1], configurations[-1][2])
@@ -149,6 +183,7 @@ class PathPlan(object):
 
     def choose_parent(self, new_node, near_inds):
         if not near_inds:
+            print("not near ins")
             return None
 
         costs = []
@@ -161,6 +196,7 @@ class PathPlan(object):
                 costs.append(float("inf"))
         min_cost = min(costs)
         if min_cost == float("inf"):
+            print("min cost is inf")
             return None
 
         min_ind = near_inds[costs.index(min_cost)]
@@ -215,7 +251,104 @@ class PathPlan(object):
         return path
 
     def is_collision(self, node):
-        pass
+        for i in range(len(node.path_x)) :
+            
+            pos = [node.path_x[i], node.path_y[i]]
+ 
+            # map_pos = self.real_to_map(pos)
+            print("pos", pos)
+
+            if pos[0] > self.map_width-1 or pos[0] < 0 or pos[1] > self.map_height-1 or pos[1] < 0:
+                print("out of bounds, continuing")
+                return True
+
+            val = self.map_dilated[int(pos[0]), int(pos[1])]
+            if val > 0:
+                print("hit wall, continuing")
+                return True
+        print("clear")
+        return False
+
+
+
+    def real_to_map(self, p):
+        quat = self.map.info.origin.orientation
+        explicit_quat = [quat.x, quat.y, quat.z, quat.w]
+        (origin_roll, origin_pitch, origin_yaw) = tf.transformations.euler_from_quaternion(explicit_quat)
+
+        px_x = p[0]
+        px_y = p[1]
+        new_pose = np.zeros(3)
+        new_pose[0] = int((px_x - self.map.info.origin.position.x) / self.map.info.resolution)
+        new_pose[1] = int((px_y - self.map.info.origin.position.y) / self.map.info.resolution)
+        rot = np.array([[np.cos(origin_yaw), -np.sin(origin_yaw), 0],
+                        [np.sin(origin_yaw), np.cos(origin_yaw), 0],
+                        [0, 0, 1]])
+
+        new_pose = np.int64(np.matmul(rot, new_pose))
+
+        # local_x = px_x * np.cos(-origin_yaw) - px_y * np.sin(-origin_yaw)
+        # local_y = px_y * np.cos(-origin_yaw) + px_x * np.sin(-origin_yaw)
+        # local_x -= int(self.map.info.origin.position.x)
+        # local_y -= int(self.map.info.origin.position.y)
+        # local_x /= self.map.info.resolution
+        # local_y /= self.map.info.resolution
+
+        # return (-int(local_x), -int(local_y))
+        return (new_pose[0], new_pose[1])
+
+    def map_to_real(self, p):
+        quat = self.map.info.origin.orientation
+        explicit_quat = [quat.x, quat.y, quat.z, quat.w]
+        (origin_roll, origin_pitch, origin_yaw) = tf.transformations.euler_from_quaternion(explicit_quat)
+
+        px_x = p[0]
+        px_y = p[1]
+        new_pose = np.zeros(3)
+        new_pose[0] = px_x
+        new_pose[1] = px_y
+        rot = np.array([[np.cos(origin_yaw), np.sin(origin_yaw), 0],
+                        [-np.sin(origin_yaw), np.cos(origin_yaw), 0],
+                        [0, 0, 1]])
+        new_pose = np.matmul(rot, new_pose)
+        new_pose[0] = new_pose[0] * self.map.info.resolution + self.map.info.origin.position.x
+        new_pose[1] = new_pose[1] * self.map.info.resolution + self.map.info.origin.position.y
+        return (new_pose[0], new_pose[1])
+    # def raytrace(A, B):
+        # """ Return all cells of the unit grid crossed by the line segment between
+        #     A and B.
+        # """
+
+        # (xA, yA) = 
+        # (xB, yB) = B
+        # (dx, dy) = (xB - xA, yB - yA)
+        # (sx, sy) = (sign(dx), sign(dy))
+
+        # grid_A = (floor(A[0]), floor(A[1]))
+        # grid_B = (floor(B[0]), floor(B[1]))
+        # (x, y) = grid_A
+        # traversed=[grid_A]
+
+        # tIx = dy * (x + sx - xA) if dx != 0 else float("+inf")
+        # tIy = dx * (y + sy - yA) if dy != 0 else float("+inf")
+
+        # while (x,y) != grid_B:
+        #     # NB if tIx == tIy we increment both x and y
+        #     (movx, movy) = (tIx <= tIy, tIy <= tIx)
+
+        #     if movx:
+        #         # intersection is at (x + sx, yA + tIx / dx^2)
+        #         x += sx
+        #         tIx = dy * (x + sx - xA)
+
+        #     if movy:
+        #         # intersection is at (xA + tIy / dy^2, y + sy)
+        #         y += sy
+        #         tIy = dx * (y + sy - yA)
+
+        #     traversed.append( (x,y) )
+
+        # return traversed
 
 
 if __name__=="__main__":
