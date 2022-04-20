@@ -15,6 +15,7 @@ import tf.transformations
 import random
 import math
 from skimage import morphology
+import heapq
 
 class Node():
     """A node class for A* Pathfinding"""
@@ -59,7 +60,7 @@ class PathPlan(object):
         explicit_quat = [quat.x, quat.y, quat.z, quat.w]
         (origin_roll, origin_pitch, self.origin_yaw) = tf.transformations.euler_from_quaternion(explicit_quat)
         data = np.array([self.map.data]).reshape((self.map_height, self.map_width))
-        self.map_dilated = morphology.dilation(data, selem=np.ones((8,8)))
+        self.map_dilated = morphology.dilation(data, selem=np.ones((15,15)))
 
         # if (self.map != None and self.start != None and self.goal != None):
         #     self.plan_path()
@@ -76,12 +77,12 @@ class PathPlan(object):
         if self.map is None:
             return
 
-        self.start = [x,y]
+        self.start = (x,y)
 
     def goal_cb(self, msg):
         pos = msg.pose.position
 
-        self.goal = [pos.x, pos.y]
+        self.goal = (pos.x, pos.y)
         rospy.loginfo("got new goal ")
         rospy.loginfo(self.goal)
         if (self.map is not None and self.start is not None):
@@ -109,7 +110,7 @@ class PathPlan(object):
         #occupancy grid -> (height -> x , width -> y)
         goal_map = self.real_to_map(self.goal)
         # pixel frame
-        start_node = Node(None, [start_x, start_y])
+        start_node = Node(None, (start_x, start_y))
         start_node.g = start_node.h = start_node.f = 0
 
         end_node = Node(None, goal_map)
@@ -117,33 +118,45 @@ class PathPlan(object):
 
         # Initialize both open and closed list
         open_list = []
-        closed_list = []
+        # tuple of priority, cost, node
+        # f is priority, cost is g
+        heapq.heappush(open_list, (0, 0, start_node))
+        # closed_list = []
+        closed_list = set()
+        open_set = set()
+        open_set.add(start_node.position)
 
         # Add the start node
-        open_list.append(start_node)
+        # open_list.append(start_node)
 
         # Loop until you find the end or run out of time
         time = 0
         # while len(open_list) > 0 and time <= 1000:
-        while len(open_list) > 0:
+        # while len(open_list) > 0:
+        while open_list:
             time += 1
 
             # Get the current node
-            current_node = open_list[0]
-            current_index = 0
-            for index, item in enumerate(open_list):
-                if item.f < current_node.f:
-                    current_node = item
-                    current_index = index
+            priority, cost, current_node = heapq.heappop(open_list)
+            open_set.remove(current_node.position)
+            # current_node = open_list[0]
+            # current_index = 0
+            # for index, item in enumerate(open_list):
+            #     if item.f < current_node.f:
+            #         current_node = item
+            #         current_index = index
 
             # rospy.loginfo("current node")
             # rospy.loginfo(current_node.position)
+
             # rospy.loginfo("its f value")
             # rospy.loginfo(current_node.f)
 
             # Pop current off open list, add to closed list
-            open_list.pop(current_index)
-            closed_list.append(current_node)
+            # open_list.pop(current_index)
+
+            closed_list.add(current_node.position)
+            # closed_list.append(current_node)
 
             # for closed_node in closed_list:
             #     # open_node_map = self.real_to_map(open_node.position)
@@ -209,7 +222,14 @@ class PathPlan(object):
             child_offsets = []
             for i in range(-5, 6):
                 for j in range(-5, 6):
+                    if i == 0 and j == 0:
+                        continue
                     child_offsets.append((i,j))
+            # for i in range(-1, 1):
+            #     for j in range(-1, 1):
+            #         if i == 0 and j == 0:
+            #             continue
+            #         child_offsets.append((i,j))
 
             # for new_position in [(0, -3), (0, 3), (-3, 0), (3, 0)]:
             for new_position in child_offsets:
@@ -235,18 +255,21 @@ class PathPlan(object):
                 # Append
                 children.append(new_node)
 
+
+            # closed_list.add(current_node.position)
             # Loop through children
             for child in children:
-
                 # Child is on the closed list
-                exists = False
-                for closed_child in closed_list:
-                    if child.position[0] == closed_child.position[0] and child.position[1] == closed_child.position[1]:
-                        exists = True
-                        break
-                if exists:
+                # exists = False
+                if child.position in closed_list:
                     continue
-                exists = False
+                # for closed_child in closed_list:
+                #     if child.position[0] == closed_child.position[0] and child.position[1] == closed_child.position[1]:
+                #         exists = True
+                #         break
+                # if exists:
+                #     continue
+                # exists = False
 
                 # Create the f, g, and h values
                 # child.g = current_node.g + 1
@@ -268,19 +291,26 @@ class PathPlan(object):
                 child.f = priority
 
                 # Child is already in the open list
-                for open_node in open_list:
-                    # if (child.position[0] == open_node.position[0]) and (child.position[1] == open_node.position[1]) and child.g > open_node.g:
-                    #     continue
-                    if (child.position[0] == open_node.position[0]) and (child.position[1] == open_node.position[1]):
-                        exists = True
-                        break
-                if exists:
+                # for open_node in open_list:
+                #     # if (child.position[0] == open_node.position[0]) and (child.position[1] == open_node.position[1]) and child.g > open_node.g:
+                #     #     continue
+                #     if (child.position[0] == open_node.position[0]) and (child.position[1] == open_node.position[1]):
+                #         exists = True
+                #         break
+                # if exists:
+                #     continue
+                if child.position in open_set:
                     continue
 
                 # Add the child to the open list
-                open_list.append(child)
-        rospy.loginfo("time?")
-        rospy.loginfo(time)
+                # tuple of priority, cost, node
+                # f is priority, cost is g
+                # heapq.heappush(open_list, (0, 0, start_node))
+                heapq.heappush(open_list, (child.f, child.g, child))
+                open_set.add(child.position)
+                # open_list.append(child)
+        # rospy.loginfo("time?")
+        # rospy.loginfo(time)
 
     def real_to_map(self, p):
         px_x = p[0]
