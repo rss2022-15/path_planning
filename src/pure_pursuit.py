@@ -18,8 +18,9 @@ class PurePursuit(object):
     """
     def __init__(self):
         self.odom_topic       = rospy.get_param("~odom_topic")
-        self.speed            = 1. # FILL IN #
-        self.lookahead        = 2.#.*np.log2(self.speed+1) # FILL IN #
+        self.speed            = 2. # FILL IN #
+        self.lookahead        = 0.5 #.*np.log2(self.speed+1) # FILL IN #
+        self.stop = False
         self.frac_along_traj  = 0.
         #self.wrap             = # FILL IN #
         self.wheelbase_length = 1. # FILL IN #
@@ -40,6 +41,7 @@ class PurePursuit(object):
         self.trajectory.clear()
         self.trajectory.fromPoseArray(msg)
         self.trajectory.publish_viz(duration=0.0)
+        self.stop = False
 
     def odom_callback(self, data):
         #rospy.loginfo("odom called back :)")
@@ -73,6 +75,7 @@ class PurePursuit(object):
         i_shortest_distance = np.argmin(distances)
         self.errors.append(distances[i_shortest_distance])
 
+        lookahead_distance = self.lookahead
         # Look farther when on a long, straight line
         length_of_traj = self.trajectory.distances[i_shortest_distance+1] - self.trajectory.distances[i_shortest_distance]
         lookahead_distance = self.lookahead * (np.log10(length_of_traj) + 1)
@@ -111,14 +114,20 @@ class PurePursuit(object):
                 else:
                     target, self.frac_along_traj = max(targets, key=lambda x: x[1])
 
+                if self.frac_along_traj > 0.5:
+                    target = self.trajectory.points[i+1]
+
                 # Print average error when we reach the end of track
-                if first_intersection == len(distances)-1 and self.frac_along_traj > 0.9 and len(self.errors) > 1:
+                if first_intersection == len(distances)-1 and self.frac_along_traj > 0.7 and len(self.errors) > 1:
                     rospy.loginfo(["Average error: ", np.mean(self.errors), len(self.errors)])
                     self.errors = []
+                    #self.stop = True
 
+                self.stop = False
                 break
 
         else:  # No intersection found
+            self.stop = True
             # p1, p2 = line segment, p3 = car position, x = closets point on line segment to x
             i = i_shortest_distance
             x1, y1 = self.trajectory.points[i]
@@ -131,6 +140,7 @@ class PurePursuit(object):
             #rospy.loginfo(["point on line  :", x, "could not find intersection"])
             target = x
 
+        """
         marker = Marker()
         marker.header.frame_id = "/map"
         marker.header.stamp = rospy.Time.now()
@@ -156,6 +166,7 @@ class PurePursuit(object):
         marker.pose.orientation.w = 1.0
 
         self.debug_pub.publish(marker)
+        """
 
         # Implement drive command 
         # Get relative position of target in world frame
@@ -186,6 +197,9 @@ class PurePursuit(object):
 
         drive_cmd.drive.speed = self.speed
         drive_cmd.drive.steering_angle = angle
+
+        if self.stop:
+            drive_cmd.drive.speed = 0
 
         self.drive_pub.publish(drive_cmd)
         #rospy.loginfo(["drive_angle: ", angle, "angle to target", angle_to_point])

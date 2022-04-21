@@ -1,63 +1,53 @@
 #!/usr/bin/env python
 
+from threading import local
 import rospy
 import numpy as np
-from geometry_msgs.msg import PoseStamped, PoseArray
+from geometry_msgs.msg import PoseStamped, PoseArray, Pose
 from nav_msgs.msg import Odometry, OccupancyGrid
+from visualization_msgs.msg import Marker
+
 import rospkg
 import time, os
 from utils import LineTrajectory
-import dubins
+# import dubins
 import tf.transformations
 import random
 import math
 from skimage import morphology
+import heapq
 
+class Node():
+    """A node class for A* Pathfinding"""
 
-class Node:
-    def __init__(self, x, y, yaw):
-        self.x = x
-        self.y = y
-        self.yaw = yaw
-        self.parent = None
-        self.cost = 0.0
-        self.path_x = []
-        self.path_y = []
-        self.path_yaw = []
+    def __init__(self, parent=None, position=None):
+        self.parent = parent
+        self.position = position
+
+        self.g = 0
+        self.h = 0
+        self.f = 0
+
+    def __eq__(self, other):
+        return self.position == other.position
 
 class PathPlan(object):
     """ Listens for goal pose published by RViz and uses it to plan a path from
     current car pose.
     """
     def __init__(self):
-        # in pixels index in as [v,u] (swapped indices)
         self.map = None
         self.start = None
         self.goal = None
-        self.x_range = None
-        self.y_range = None
-        self.map_dilated = None
-
-        self.turn_radius = 1.0      # TODO: what the fuk
-        self.step_size = 1        # TODO: also what the fuk
-        self.step_len = 10.0        # TODO: wtf
-        self.search_radius = 50.0   # TODO: also wtf
-
-        self.ITER_MAX = 1400    # no fukin clu my doods
-
         self.odom_topic = rospy.get_param("~odom_topic")
         self.map_sub = rospy.Subscriber("/map", OccupancyGrid, self.map_cb)
         self.trajectory = LineTrajectory("/planned_trajectory")
         self.goal_sub = rospy.Subscriber("/move_base_simple/goal", PoseStamped, self.goal_cb, queue_size=10)
         self.traj_pub = rospy.Publisher("/trajectory/current", PoseArray, queue_size=10)
         self.odom_sub = rospy.Subscriber(self.odom_topic, Odometry, self.odom_cb)
+        self.debug_pub = rospy.Publisher("/debug_point_search", Marker, queue_size=1)
 
 
-    # node should have
-    # x, y, yaw position
-    # parent
-    # cost
-    # path x, y, yaw
     def map_cb(self, msg):
         self.map = msg
         self.map_width = self.map.info.width
@@ -66,290 +56,294 @@ class PathPlan(object):
         self.map_origin_x = self.map.info.origin.position.x
         self.map_origin_y = self.map.info.origin.position.y
 
-        data = np.array([self.map.data]).reshape((self.map_height, self.map_width))
-        self.map_dilated = morphology.dilation(data, selem=np.ones((8,8)))
-
-        self.x_range = self.map_width
-        self.y_range = self.map_height
-        if (self.map != None and self.start != None and self.goal != None):
-            self.plan_path()
-
-    def odom_cb(self, msg):
-        x = int(msg.pose.pose.position.x)
-        y = int(msg.pose.pose.position.y)
-        quat = msg.pose.pose.orientation
+        quat = self.map.info.origin.orientation
         explicit_quat = [quat.x, quat.y, quat.z, quat.w]
-        (roll, pitch, yaw) = tf.transformations.euler_from_quaternion(explicit_quat)
+        (origin_roll, origin_pitch, self.origin_yaw) = tf.transformations.euler_from_quaternion(explicit_quat)
+        data = np.array([self.map.data]).reshape((self.map_height, self.map_width))
+        self.map_dilated = morphology.dilation(data, selem=np.ones((15,15)))
 
-        if (self.start is None and self.map is not None and self.goal is not None):
-            self.start = [x, y, yaw]
-            rospy.loginfo("got start and will plan")
-            rospy.loginfo(self.start)
-            self.plan_path()
-        # reinitialize traj and other stuff and check if other things exist and call path plan
         # if (self.map != None and self.start != None and self.goal != None):
         #     self.plan_path()
 
+    def odom_cb(self, msg):
+        x = msg.pose.pose.position.x
+        y = msg.pose.pose.position.y
+
+        # if (self.start is None and self.map is not None and self.goal is not None):
+        #     self.start = [x, y]
+        #     rospy.loginfo("got start and will plan")
+        #     rospy.loginfo(self.start)
+        #     self.plan_path()
+        if self.map is None:
+            return
+
+        self.start = (x,y)
 
     def goal_cb(self, msg):
         pos = msg.pose.position
-        quat = msg.pose.orientation
-        explicit_quat = [quat.x, quat.y, quat.z, quat.w]
-        (roll, pitch, yaw) = tf.transformations.euler_from_quaternion(explicit_quat)
 
-        self.goal = [int(pos.x), int(pos.y), yaw]
-        rospy.loginfo("got new goal ")
-        rospy.loginfo(self.goal)
+        self.goal = (pos.x, pos.y)
+        #rospy.loginfo("got new goal ")
+        #rospy.loginfo(self.goal)
+        if (self.map is not None and self.start is not None):
+            self.plan_path()
+        # if (self.map != None and self.start != None and self.goal != None):
+        #     self.plan_path()
 
     def plan_path(self):
-        rospy.loginfo([self.map])
         ## CODE FOR PATH PLANNING ##
-        start_map = self.real_to_map(self.start)
-        goal_map = self.real_to_map(self.goal)
-        self.start_node = Node(int(start_map[0]), int(start_map[1]), self.start[2])
-        self.goal_node = Node(int(goal_map[0]), int(goal_map[1]), self.goal[2])
-
-        
-
-        # start_map = self.real_to_map(self.start)
-
-        self.V = [self.start_node]
-        self.path = None
-
-        for i in range(self.ITER_MAX):
-            print("iter: ", i, " number of nodes: ", len(self.V))
-            rand_node = self.sample()
-            near_node = self.nearest(rand_node)
-            new_node = self.steer(near_node, rand_node)
-            print("checking for is_collision")
-            if new_node and not self.is_collision(new_node):
-                print("no collision")
-
-                near_indices = self.near(new_node)
-                print("near incicies", near_indices)
-                new_node = self.choose_parent(new_node, near_indices)
-                print("is new node", new_node)
-
-                if new_node:
-                    self.V.append(new_node)
-                    self.rewire(new_node, near_indices)
-
-        last_index = self.best_goal()
-        path = self.generate_final(last_index)
+        path = self.astar()
         self.trajectory.points = path
 
         # publish trajectory
         self.traj_pub.publish(self.trajectory.toPoseArray())
 
         # visualize trajectory Markers
+        self.trajectory.visualize = True
         self.trajectory.publish_viz()
 
-    def sample(self):
-        if random.random() > 0.1: #self.goal_sample_rate:
-            return Node(random.uniform(0, self.x_range), random.uniform(0, self.y_range), random.uniform(-math.pi, math.pi))
-        else:
-            return self.goal_node
+    def astar(self):
+        start_map = self.real_to_map(self.start)
+        start_x = start_map[0]
+        start_y = start_map[1]
 
-    def nearest(self, rand):
-        return self.V[int(np.argmin([(nd.x - rand.x)**2 + (nd.y - rand.y)**2 for nd in self.V]))]
+        #occupancy grid -> (height -> x , width -> y)
+        goal_map = self.real_to_map(self.goal)
+        # pixel frame
+        start_node = Node(None, (start_x, start_y))
+        start_node.g = start_node.h = start_node.f = 0
 
-    def steer(self, near, rand):
-        q0 = (near.x, near.y, near.yaw)
-        q1 = (rand.x, rand.y, rand.yaw)
-        print(q0)
+        end_node = Node(None, goal_map)
+        end_node.g = end_node.h = end_node.f = 0
 
-        path = dubins.shortest_path(q0, q1, self.turn_radius)
-        configurations, _ = path.sample_many(self.step_size)
+        # Initialize both open and closed list
+        open_list = []
+        # tuple of priority, cost, node
+        # f is priority, cost is g
+        heapq.heappush(open_list, (0, 0, start_node))
+        # closed_list = []
+        closed_list = set()
+        open_set = set()
+        open_set.add(start_node.position)
 
-        if len(configurations) <= 1:
-            print("config < 1")
-            return None
+        # Add the start node
+        # open_list.append(start_node)
 
-        new_node = Node(configurations[-1][0], configurations[-1][1], configurations[-1][2])
-        new_node.path_x = [configurations[i][0] for i in range(len(configurations))]
-        new_node.path_y = [configurations[i][1] for i in range(len(configurations))]
-        new_node.path_yaw = [configurations[i][2] for i in range(len(configurations))]
-        new_path_len = path.path_length()
-        new_node.cost = near.cost + new_path_len
-        new_node.parent = near
-        return new_node
+        # Loop until you find the end or run out of time
+        time = 0
+        # while len(open_list) > 0 and time <= 1000:
+        # while len(open_list) > 0:
+        while open_list and time <= 3000:
+            time += 1
 
-    def near(self, node):
-        n = len(self.V) + 1
-        r = min(self.search_radius * math.sqrt((math.log(n)) / n), self.step_len)
-        dist_table = [(nd.x - node.x)**2 + (nd.y - node.y)**2 for nd in self.V]
-        node_near_ind = [ind for ind in range(len(dist_table)) if dist_table[ind] <= r**2]
-        return node_near_ind
+            # Get the current node
+            priority, cost, current_node = heapq.heappop(open_list)
+            open_set.remove(current_node.position)
+            # current_node = open_list[0]
+            # current_index = 0
+            # for index, item in enumerate(open_list):
+            #     if item.f < current_node.f:
+            #         current_node = item
+            #         current_index = index
 
-    def choose_parent(self, new_node, near_inds):
-        if not near_inds:
-            print("not near ins")
-            return None
+            # rospy.loginfo("current node")
+            # rospy.loginfo(current_node.position)
 
-        costs = []
-        for i in near_inds:
-            near_node = self.V[i]
-            t_node = self.steer(near_node, new_node)
-            if t_node and not self.is_collision(t_node):
-                costs.append(near_node.cost + math.hypot((new_node.x - near_node.x), (new_node.y - near_node.y)))
-            else:
-                costs.append(float("inf"))
-        min_cost = min(costs)
-        if min_cost == float("inf"):
-            print("min cost is inf")
-            return None
+            # rospy.loginfo("its f value")
+            # rospy.loginfo(current_node.f)
 
-        min_ind = near_inds[costs.index(min_cost)]
-        return self.steer(self.V[min_ind], new_node)
+            # Pop current off open list, add to closed list
+            # open_list.pop(current_index)
 
-    def propagate(self, nd):
-        for node in self.V:
-            if node.parent == nd:
-                node.cost = nd.cost + math.hypot((nd.x - node.x),(nd.y - node.y))
-                self.propagate(node)
+            closed_list.add(current_node.position)
+            # closed_list.append(current_node)
 
-    def rewire(self, new_node, near_inds):
-        for i in near_inds:
-            near_node = self.V[i]
-            edge_node = self.steer(new_node, near_node)
-            if not edge_node:
-                continue
-            edge_node.cost = new_node.cost + math.hypot((new_node.x - near_node.x), (new_node.y - near_node.y))
+            # for closed_node in closed_list:
+            #     # open_node_map = self.real_to_map(open_node.position)
+            #     # child_map = self.real_to_map(child.position)
+            #     if (current_node.position[0] == closed_node.position[0]) and (current_node.position[1] == closed_node.position[1]):
+            #         continue
 
-            if not self.is_collision(edge_node) and near_node.cost > edge_node.cost:
-                self.V[i] = edge_node
-                self.propagate(new_node)
+            # Found the goal
+            if (current_node.position[0] == end_node.position[0]) and (current_node.position[1] == end_node.position[1]):
+                # traj_lol = PoseArray()
+                # traj_lol.header.frame_id = "/map"
+                # traj_lol.header.stamp = rospy.Time.now()
+                # traj_lol.poses = []
+                path = []
+                current = current_node
+                while current is not None:
+                    #grid to node 
+                    pos_x = current.position[0]
+                    pos_y = current.position[1]
+                    real_x, real_y = self.map_to_real([pos_x, pos_y])
+                    # thankunext = Pose()
+                    # thankunext.position.x = real_x
+                    # thankunext.position.y = real_y
+                    # path.append(thankunext)
+                    path.append([real_x, real_y])
+                    current = current.parent
+                rospy.loginfo("hello cna anyone hear me")
+                # traj_lol.poses = path[::-1]
+                # self.traj_pub.publish(traj_lol)
+                return path[::-1] # Return reversed path
 
-    def best_goal(self):
-        dist_to_goals = [math.hypot((nd.x - self.goal_node.x),(nd.y - self.goal_node.y)) for nd in self.V]
-        goal_inds = [dist_to_goals.index(i) for i in dist_to_goals if i <= self.step_len]
+            """
+            marker = Marker()
+            marker.header.frame_id = "/map"
+            marker.header.stamp = rospy.Time.now()
 
-        good_goal_inds = []
-        for i in goal_inds:
-            t_node = self.steer(self.V[i], self.goal_node)
-            if t_node and not self.is_collision(t_node):
-                good_goal_inds.append(i)
+            marker.type = 2
+            marker.id = 0
 
-        if not good_goal_inds:
-            return None
+            marker.scale.x = .2
+            marker.scale.y = .2
+            marker.scale.z = .05
 
-        min_cost = min([self.V[i].cost for i in good_goal_inds])
-        for i in good_goal_inds:
-            if self.V[i].cost == min_cost:
-                return i
+            marker.color.r = 1.0
+            marker.color.g = 0.0
+            marker.color.b = 0.83
+            marker.color.a = 1.0
 
-        return None
+            marker.pose.position.x = self.map_to_real(current_node.position)[0]
+            marker.pose.position.y = self.map_to_real(current_node.position)[1]
+            marker.pose.position.z = 0
+            marker.pose.orientation.x = 0.0
+            marker.pose.orientation.y = 0.0
+            marker.pose.orientation.z = 0.0
+            marker.pose.orientation.w = 1.0
 
-    def generate_final(self, goal_index):
-        path = [[self.goal_node.x, self.goal_node.y]]
-        node = self.V[goal_index]
-        while node.parent:
-            for (ix, iy) in zip(reversed(node.path_x), reversed(node.path_y)):
-                path.append([ix, iy])
-            node = node.parent
-        path.append([self.start_node.x, self.start_node.y])
-        return path
-
-    def is_collision(self, node):
-        for i in range(len(node.path_x)) :
+            self.debug_pub.publish(marker)      
+            """
+            # Generate children
             
-            pos = [node.path_x[i], node.path_y[i]]
- 
-            # map_pos = self.real_to_map(pos)
-            print("pos", pos)
+            children = []
+            # angle = current_node.position[2] # TODO: Only drive forward
+            # for new_position in [(0, -1), (0, 1), (-1, 0), (1, 0), (-1, -1), (-1, 1), (1, -1), (1, 1)]: # Adjacent squares
 
-            if pos[0] > self.map_width-1 or pos[0] < 0 or pos[1] > self.map_height-1 or pos[1] < 0:
-                print("out of bounds, continuing")
-                return True
+            child_offsets = []
+            for i in range(-5, 6):
+                for j in range(-5, 6):
+                    if i == 0 and j == 0:
+                        continue
+                    child_offsets.append((i,j))
+            # for i in range(-1, 1):
+            #     for j in range(-1, 1):
+            #         if i == 0 and j == 0:
+            #             continue
+            #         child_offsets.append((i,j))
 
-            val = self.map_dilated[int(pos[0]), int(pos[1])]
-            if val > 0:
-                print("hit wall, continuing")
-                return True
-        print("clear")
-        return False
+            # for new_position in [(0, -3), (0, 3), (-3, 0), (3, 0)]:
+            for new_position in child_offsets:
+                # Get node position
+                node_position = (current_node.position[0] + new_position[0], current_node.position[1] + new_position[1])
+                local_x, local_y = node_position
+
+                # # Make sure within range
+                # if local_x > self.map_height-1 or local_x < 0 or local_y > self.map_width-1 or local_y < 0:
+                if local_x > self.map_width-1 or local_x < 0 or local_y > self.map_height-1 or local_y < 0:
+                    # rospy.loginfo("out of bounds, continuing")
+                    continue
+
+                # Make sure walkable terrain
+                # val = self.map.data[local_x*self.map_width+local_y]
+                val = self.map_dilated[local_y, local_x]
+                if val > 0.8:
+                    continue
+
+                # Create new node
+                new_node = Node(current_node, node_position)
+
+                # Append
+                children.append(new_node)
 
 
+            # closed_list.add(current_node.position)
+            # Loop through children
+            for child in children:
+                # Child is on the closed list
+                # exists = False
+                if child.position in closed_list:
+                    continue
+                # for closed_child in closed_list:
+                #     if child.position[0] == closed_child.position[0] and child.position[1] == closed_child.position[1]:
+                #         exists = True
+                #         break
+                # if exists:
+                #     continue
+                # exists = False
+
+                # Create the f, g, and h values
+                # child.g = current_node.g + 1
+                # next_cost = current_node.g + math.sqrt((child.position[0] - end_node.position[0]) ** 2) + ((child.position[1] - end_node.position[1]) ** 2)
+                # next_cost = current_node.g + (child.position[0] - current_node.position[0])**2 + (child.position[1] - current_node.position[1])**2
+
+                # this does work below
+                # next_cost = current_node.g + 1
+                # child.g = next_cost
+                # priority = next_cost + np.abs(child.position[0] - end_node.position[0]) + np.abs(child.position[1] - end_node.position[1])
+
+                next_cost = current_node.g + np.abs(child.position[0] - current_node.position[0]) + np.abs(child.position[1] - current_node.position[1])
+                child.g = next_cost
+                priority = next_cost + (child.position[0] - end_node.position[0]) ** 2 + (child.position[1] - end_node.position[1]) ** 2
+                # child.g = current_node.g + ((child.position[0] - end_node.position[0]) ** 2) + ((child.position[1] - end_node.position[1]) ** 2)
+                # child.h = ((child.position[0] - end_node.position[0]) ** 2) + ((child.position[1] - end_node.position[1]) ** 2)
+                # child.h = np.abs(child.position[0] - end_node.position[0]) + np.abs(child.position[1] - end_node.position[1])
+                # child.f = child.g + child.h
+                child.f = priority
+
+                # Child is already in the open list
+                # for open_node in open_list:
+                #     # if (child.position[0] == open_node.position[0]) and (child.position[1] == open_node.position[1]) and child.g > open_node.g:
+                #     #     continue
+                #     if (child.position[0] == open_node.position[0]) and (child.position[1] == open_node.position[1]):
+                #         exists = True
+                #         break
+                # if exists:
+                #     continue
+                if child.position in open_set:
+                    continue
+
+                # Add the child to the open list
+                # tuple of priority, cost, node
+                # f is priority, cost is g
+                # heapq.heappush(open_list, (0, 0, start_node))
+                heapq.heappush(open_list, (child.f, child.g, child))
+                open_set.add(child.position)
+                # open_list.append(child)
+        # rospy.loginfo("time?")
+        # rospy.loginfo(time)
 
     def real_to_map(self, p):
-        quat = self.map.info.origin.orientation
-        explicit_quat = [quat.x, quat.y, quat.z, quat.w]
-        (origin_roll, origin_pitch, origin_yaw) = tf.transformations.euler_from_quaternion(explicit_quat)
-
         px_x = p[0]
         px_y = p[1]
+
         new_pose = np.zeros(3)
-        new_pose[0] = int((px_x - self.map.info.origin.position.x) / self.map.info.resolution)
-        new_pose[1] = int((px_y - self.map.info.origin.position.y) / self.map.info.resolution)
-        rot = np.array([[np.cos(origin_yaw), -np.sin(origin_yaw), 0],
-                        [np.sin(origin_yaw), np.cos(origin_yaw), 0],
+        new_pose[0] = (px_x - self.map_origin_x) / self.map_resolution
+        new_pose[1] = (px_y - self.map_origin_y) / self.map_resolution
+
+        rot = np.array([[np.cos(self.origin_yaw), -np.sin(self.origin_yaw), 0],
+                        [np.sin(self.origin_yaw), np.cos(self.origin_yaw), 0],
                         [0, 0, 1]])
 
         new_pose = np.int64(np.matmul(rot, new_pose))
-
-        # local_x = px_x * np.cos(-origin_yaw) - px_y * np.sin(-origin_yaw)
-        # local_y = px_y * np.cos(-origin_yaw) + px_x * np.sin(-origin_yaw)
-        # local_x -= int(self.map.info.origin.position.x)
-        # local_y -= int(self.map.info.origin.position.y)
-        # local_x /= self.map.info.resolution
-        # local_y /= self.map.info.resolution
-
-        # return (-int(local_x), -int(local_y))
         return (new_pose[0], new_pose[1])
 
     def map_to_real(self, p):
-        quat = self.map.info.origin.orientation
-        explicit_quat = [quat.x, quat.y, quat.z, quat.w]
-        (origin_roll, origin_pitch, origin_yaw) = tf.transformations.euler_from_quaternion(explicit_quat)
-
         px_x = p[0]
         px_y = p[1]
+
         new_pose = np.zeros(3)
         new_pose[0] = px_x
         new_pose[1] = px_y
-        rot = np.array([[np.cos(origin_yaw), np.sin(origin_yaw), 0],
-                        [-np.sin(origin_yaw), np.cos(origin_yaw), 0],
+
+        rot = np.array([[np.cos(self.origin_yaw), np.sin(self.origin_yaw), 0],
+                        [-np.sin(self.origin_yaw), np.cos(self.origin_yaw), 0],
                         [0, 0, 1]])
         new_pose = np.matmul(rot, new_pose)
-        new_pose[0] = new_pose[0] * self.map.info.resolution + self.map.info.origin.position.x
-        new_pose[1] = new_pose[1] * self.map.info.resolution + self.map.info.origin.position.y
+        new_pose[0] = new_pose[0] * self.map_resolution + self.map_origin_x
+        new_pose[1] = new_pose[1] * self.map_resolution + self.map_origin_y
         return (new_pose[0], new_pose[1])
-    # def raytrace(A, B):
-        # """ Return all cells of the unit grid crossed by the line segment between
-        #     A and B.
-        # """
-
-        # (xA, yA) = 
-        # (xB, yB) = B
-        # (dx, dy) = (xB - xA, yB - yA)
-        # (sx, sy) = (sign(dx), sign(dy))
-
-        # grid_A = (floor(A[0]), floor(A[1]))
-        # grid_B = (floor(B[0]), floor(B[1]))
-        # (x, y) = grid_A
-        # traversed=[grid_A]
-
-        # tIx = dy * (x + sx - xA) if dx != 0 else float("+inf")
-        # tIy = dx * (y + sy - yA) if dy != 0 else float("+inf")
-
-        # while (x,y) != grid_B:
-        #     # NB if tIx == tIy we increment both x and y
-        #     (movx, movy) = (tIx <= tIy, tIy <= tIx)
-
-        #     if movx:
-        #         # intersection is at (x + sx, yA + tIx / dx^2)
-        #         x += sx
-        #         tIx = dy * (x + sx - xA)
-
-        #     if movy:
-        #         # intersection is at (xA + tIy / dy^2, y + sy)
-        #         y += sy
-        #         tIy = dx * (y + sy - yA)
-
-        #     traversed.append( (x,y) )
-
-        # return traversed
-
 
 if __name__=="__main__":
     rospy.init_node("path_planning")
