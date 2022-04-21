@@ -18,7 +18,7 @@ class PurePursuit(object):
     """
     def __init__(self):
         self.odom_topic       = rospy.get_param("~odom_topic")
-        self.speed            = 2. # FILL IN #
+        self.speed            = 5. # FILL IN #
         self.lookahead        = 0.5 #.*np.log2(self.speed+1) # FILL IN #
         self.stop = False
         self.frac_along_traj  = 0.
@@ -77,12 +77,12 @@ class PurePursuit(object):
 
         lookahead_distance = self.lookahead
         # Look farther when on a long, straight line
-        length_of_traj = self.trajectory.distances[i_shortest_distance+1] - self.trajectory.distances[i_shortest_distance]
-        lookahead_distance = self.lookahead * (np.log10(length_of_traj) + 1)
+        #length_of_traj = self.trajectory.distances[i_shortest_distance+1] - self.trajectory.distances[i_shortest_distance]
+        #lookahead_distance = self.lookahead * (np.log10(length_of_traj) + 1)
 
         # Look shorter when reaching end of trajectory segment
-        lookahead_distance *= 0.7*(1-self.frac_along_traj) + 0.3
-        lookahead_distance = max(lookahead_distance, 1.)
+        #lookahead_distance *= 0.7*(1-self.frac_along_traj) + 0.3
+        #lookahead_distance = max(lookahead_distance, 1.)
         #rospy.loginfo((length_of_traj, lookahead_distance))
 
         #rospy.loginfo(["distances: ", distances])
